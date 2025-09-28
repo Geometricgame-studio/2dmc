@@ -1,0 +1,2986 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>2D Minecraft</title>
+
+    <link rel="stylesheet" href="minecraft/style.css"> 
+</head>
+<body>
+    <div id="navbar">
+        <div>2D Minecraft Alpha 1.0.5 - Animation update</div>
+        <div id="coords-display">X: 0, Y: 0</div>
+    </div>
+
+    <script src="minecraft/recipes/recipes.js"></script>
+    <script src="minecraft/list.js"></script>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="html-ui-layer">
+        <div id="death-screen" class="full-screen-ui hidden">
+            <h1>You Died!</h1><div></div>
+            <h3 id="death-reason"></h3>
+            <button id="respawn-button">Respawn</button>
+            <button data-function="reload">Generate a new world</button>
+        </div>
+    </div>
+
+    <div id="pause-menu" class="full-screen-ui hidden">
+        <h2>Game Menu</h2>
+        <button id="resume-button" class="longbtn">Resume Game</button>
+        <div><button data-function="toggle_set">Settings</button>
+        <button data-function="reload">Generate a new world</button></div>
+        <div><button data-function="changelog">Change log</button>
+        <button data-function="creadit">Creadits</button></div>
+        <div><button data-function="import">Import world</button>
+        <button data-function="export">Export world</button></div>
+    </div>
+
+    <div id="settings-screen" class="full-screen-ui hidden">
+        <div class="settings-panel">
+            <h2>Settings</h2>
+            <div class="setting-group">
+                <h3>Comming soon...</h3>
+            </div>
+            
+            <button data-function="toggle_set">Done & Resume Game</button>
+        </div>
+    </div>
+
+    <div id="dialog-overlay" class="full-screen-ui hidden">
+        <div id="dialog-box">
+            <h2 id="dialog-title"></h2>
+            <p id="dialog-content"></p>
+            <div id="dialog-buttons"></div>
+        </div>
+    </div>
+
+    <div id="full-chat-screen" class="full-chat-ui hidden">
+        <h1 class="window-title" style="font-family: 'MinecraftTen'; font-size: 0.75cm; border-bottom: 5px solid rgb(101, 101, 101);">Chat</h1>
+        <div id="chat-history" style="position: relative; top: 50px;">
+            <p class="system-message">歡迎來到 2D Minecraft! 按 [/] 或 [T] 開啟聊天。</p>
+            <p class="system-message">輸入 /help 查看指令列表。</p>
+        </div>
+
+        <div id="chat-input-area">
+            <input type="text" id="chat-input" placeholder="輸入訊息或指令" style="font-size: 20px; padding: 15px 10px;">
+            <button data-function="sendmsg" class="shortbtn" style="margin-left: 5px; position: relative; top: -12.5px;">Send ></button>
+        </div>
+    </div>
+
+    <div id="toast-container"></div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+            
+            const coordsDisplay = document.getElementById('coords-display');
+
+            const pauseMenu = document.getElementById('pause-menu');
+            const resumeButton = document.getElementById('resume-button');
+            let isGamePaused = false;
+
+            const dialogOverlay = document.getElementById('dialog-overlay');
+            const dialogTitle = document.getElementById('dialog-title');
+            const dialogContent = document.getElementById('dialog-content');
+            const dialogButtons = document.getElementById('dialog-buttons');
+
+            const MUSIC_BASE_PATH = 'minecraft/music/';
+            let currentTrackIndex = -1; 
+            let currentAudio = null;    
+            let isMusicPlaying = false; 
+
+            const musicPlaylist = [
+                'Os_Piano', 
+                'Broken_Clocks', 
+                'A_Familiar_Room',
+                'Haggstrom',
+                'Featherfall',
+                'Firebugs',
+                'Infinite_Amethyst'
+            ];
+
+            const BLOCK_SIZE = 38;
+            const BLOCK_ANIMATION_SPEED = 6;
+            let blockAnimationFrameCounter = 0; // 用於計數器
+            let currentBlockFrame = 0;          // 當前要繪製的通用幀索引 
+            const WORLD_WIDTH = 1000;
+            const WORLD_HEIGHT = 300;
+            const PLAYER_SPEED = 5; 
+            const SPRINT_MULTIPLIER = 2;
+            const JUMP_POWER = 8; 
+     
+            const GRAVITY = -25;
+            const ITEM_GRAVITY = -15;
+            const ITEM_STACK_SIZE = 64;
+            const ITEM_PICKUP_RANGE = 1.5;
+            const ITEM_PICKUP_INVINCIBILITY_TIME = 1;
+            const GRAVITY_CHECK_INTERVAL = 15; // 每 5 幀檢查一次重力方塊 (或每 1/12 秒，取決於你的幀率)
+            let gravityCheckCounter = 0;
+
+            const PLAYER_HEIGHT = 2; 
+
+            let gridSizeX, gridSizeY;
+            let lastTime = 0;
+            let keys = {};
+            
+            let mouse = { x: 0, y: 0, canvasX: 0, canvasY: 0 };
+            let isCraftingTableOpen = false;
+
+            const fullChatScreen = document.getElementById('full-chat-screen');
+            const chatHistory = document.getElementById('chat-history');
+            const chatInput = document.getElementById('chat-input'); 
+            let isChatOpen = false;
+            
+            const BEDROCK_LAYER_Y = -64;
+            let spawnX;
+            let spawnY;
+            
+            let gameWorld = [];
+            let camera = { x: 0, y: 0 };
+            let player = { 
+                x: 0, 
+                y: 0, 
+                yVelocity: 0, 
+                onGround: false,
+                digging: {
+                    isDigging: false,
+                    targetBlock: { x: null, y: null },
+                    progress: 0
+                }
+            };
+            let maxFallY = player.y;
+
+            // 在你的全域變數或遊戲狀態物件中
+            let playerHealth = 20; // 玩家目前的血量
+            let playerMaxHealth = 20; // 玩家的最大血量
+            let isPlayerDead = false;
+            let deathMessage = "";
+            const deathScreen = document.getElementById('death-screen');
+            const deathReasonElement = document.getElementById('death-reason');
+            const respawnButton = document.getElementById('respawn-button');
+
+            // 同時，我們仍然需要一個變數來處理無敵時間
+            let playerInvulnerabilityTime = 0; // 毫秒
+            const INVULNERABILITY_DURATION = 1.5 * 1000; // 1.5 秒
+
+            //計算傷害的常數
+            const FALL_DAMAGE_THRESHOLD = 3; // 跌落低於或等於 3 格不會受到傷害
+            const DAMAGE_PER_BLOCK = 1;
+
+            // 回血常數
+            const REGEN_AMOUNT = 1;      // 每次回血的生命值量
+            const REGEN_INTERVAL = 4;    // 回血間隔 (秒)，例如 4 秒回 1 點血
+
+            // 狀態追蹤變數 (與 player, maxFallY 等變數放在一起)
+            let timeSinceLastRegen = 0; // 追蹤自上次回血以來經過的時間
+
+            // 在你的常數定義區塊新增
+            const DAMAGE_TYPE = {
+                GENERIC: 'generic',
+                FALL: 'fall',
+                MOB: 'mob',
+                DROWNING: 'drowning',
+                VOID: 'void',
+                // ... 其他你定義的傷害類型
+            };
+
+            // 死亡訊息對應表
+            const DEATH_MESSAGES = {
+                [DAMAGE_TYPE.FALL]: "fall from a high place",
+                [DAMAGE_TYPE.MOB]: "kiled by mobs",
+                [DAMAGE_TYPE.DROWNING]: "drowned",
+                [DAMAGE_TYPE.VOID]: "fall out of this world",
+                [DAMAGE_TYPE.GENERIC]: "died",
+                // 你可以根據需要新增更多訊息
+            };
+
+            const SUPPORTED_FORMATS = ['.ogg', '.mp3'];
+            const SOUND_BASE_PATH = 'minecraft/sounds/';
+
+            const toastContainer = document.getElementById('toast-container');
+            const TOAST_DURATION = 5000;
+            const ANIMATION_DURATION = 500;
+
+            /**
+             * 顯示一個滑落出現，滑回消失的 Toast 訊息。
+             * @param {string} message - 要顯示的文字內容。
+             */
+            function showToast(message) {
+                playSound('toast');
+
+                // 1. 創建並設置 Toast 元素
+                const toastElement = document.createElement('div');
+                toastElement.classList.add('toast');
+                toastElement.innerText = message;
+                toastContainer.prepend(toastElement); 
+
+                // 2. [計時器 A] 觸發滑落（出現）動畫
+                setTimeout(() => {
+                    toastElement.classList.add('show');
+                }, 50); 
+
+                // 3. [計時器 B] 觸發滑回（消失）動畫
+                // 在 (出現動畫完成 + 顯示時間) 後執行
+                const hideDelay = ANIMATION_DURATION + TOAST_DURATION; 
+                
+                setTimeout(() => {
+                    // 移除 .show 類別，CSS 會自動讓它滑回 (transform: translateY(-100%))
+                    toastElement.classList.remove('show');
+
+                    // 4. [計時器 C] 徹底移除元素
+                    // 等待滑回動畫完成後，再從 DOM 中移除
+                    setTimeout(() => {
+                        toastElement.remove();
+                    }, ANIMATION_DURATION); // 這裡的時間必須與 CSS transition 時間匹配
+
+                }, hideDelay);
+            }
+            showToast("To active background music or sound effect, click on the Steve.");
+
+            /**
+             * 顯示一個遊戲內的對話框。
+             * @param {string} title - 對話框標題。
+             * @param {string} content - 對話框內容。
+             * @param {boolean} [isConfirm=false] - 是否需要 [確定] 和 [取消] 兩個按鈕。
+             * @returns {Promise<boolean>} 當 isConfirm=true 時，回傳 Promise (true 為確定, false 為取消)。
+             * 當 isConfirm=false 時，回傳 Promise (恆為 true)。
+             */
+            function showDialog(title, content, isConfirm = false) {
+                // 立即顯示對話框
+                dialogTitle.innerText = title;
+                dialogContent.innerText = content;
+                dialogButtons.innerHTML = ''; // 清除舊按鈕
+                dialogOverlay.classList.remove('hidden');
+
+                return new Promise(resolve => {
+                    // 隱藏函式，用於所有按鈕點擊後調用
+                    const hideDialog = () => {
+                        dialogOverlay.classList.add('hidden');
+                    };
+
+                    // 1. 創建 [確定] 按鈕
+                    const confirmBtn = document.createElement('button');
+                    confirmBtn.textContent = 'OK';
+                    confirmBtn.onclick = () => {
+                        hideDialog();
+                        // isConfirm=true 時回傳 true，否則直接回傳 true
+                        resolve(true); 
+                    };
+
+                    // 2. 如果需要 [取消] 按鈕
+                    if (isConfirm) {
+                        // 在 [確定] 前面新增一個間隔 (可選，但保持美觀)
+                        dialogButtons.innerHTML = ''; // 重新清空，以正確順序添加
+
+                        const cancelBtn = document.createElement('button');
+                        cancelBtn.textContent = 'Cancel';
+                        cancelBtn.onclick = () => {
+                            hideDialog();
+                            // isConfirm=true 時回傳 false
+                            resolve(false); 
+                        };
+
+                        dialogButtons.appendChild(confirmBtn);
+                        dialogButtons.appendChild(cancelBtn);
+                    }
+                    else dialogButtons.appendChild(confirmBtn);
+                });
+            }
+            
+            const INVENTORY_ROWS = 3;
+            const INVENTORY_COLS = 9;
+            const INVENTORY_SIZE = INVENTORY_ROWS * INVENTORY_COLS;
+            const HOTBAR_SIZE = 9;
+
+            let hotbar = new Array(HOTBAR_SIZE).fill(null);
+            hotbar[0] = {type: 'fire', count: 64};
+            hotbar[1] = {type: 'stone_pickaxe', count: 1};
+            hotbar[2] = {type: 'stone_axe', count: 1};
+            hotbar[3] = {type: 'stone_shovel', count: 1};
+
+            let mainInventory = new Array(INVENTORY_SIZE).fill(null);
+            let selectedSlot = 0;
+            let isInventoryOpen = false;
+            let mouseHeldItem = null;
+            let hoveredSlot = null;
+            
+            let hoveredBlock = null;
+            let droppedItems = [];
+            
+            const blockImages = {};
+            let steveImage = new Image(); 
+            const destroyStageImages = [];
+            const healthImage = [];
+            let missingTextureImage = new Image();
+            let imagesLoaded = 0;
+            let totalImagesToLoad = Object.keys(ITEM_DATA).length;
+            
+            let itemDisplayNameAlpha = 0;
+            let itemDisplayNameTimer = 0;
+            let currentItemDisplayName;
+            const ITEM_DISPLAY_FADE_DURATION = 0.5;
+            const ITEM_DISPLAY_SHOW_DURATION = 2.0;
+
+            const CRAFTING_ROWS = 3;
+            const CRAFTING_COLS = 3;
+            const CRAFTING_SIZE = CRAFTING_ROWS * CRAFTING_COLS;
+            let craftingGrid = new Array(CRAFTING_SIZE).fill(null);
+            let craftingOutput = null;
+
+            /**
+             * 非阻塞延遲函式。
+             * @param {number} ms - 要等待的毫秒數。
+             * @returns {Promise<void>}
+             */
+            function sleep(ms) {
+                return new Promise(resolve => setTimeout(resolve, ms));
+            }
+
+            /**
+             * 播放指定的遊戲音效。
+             * @param {string} soundName - 音效的文件名（不包含 .ogg 或路徑），例如 'step_grass'
+             * @param {number} [volume=1.0] - 音量，從 0.0（靜音）到 1.0（最大音量）。
+             */
+            function playSound(soundName, volume = 1.0) {
+                // 檢查瀏覽器是否支援 Audio 物件
+                if (typeof Audio === 'undefined') {
+                    console.warn("Audio API 不受支援，無法播放音效。");
+                    return;
+                }
+
+                // 1. 遍歷所有支援的格式
+                const fullPath = SOUND_BASE_PATH + soundName + '.ogg';
+                const audio = new Audio(fullPath);
+
+                // 找到第一個可播放的格式，設置音量並立即嘗試播放
+                audio.volume = volume;
+                
+                // 播放並捕捉錯誤（如瀏覽器自動播放限制）
+                audio.play().catch(error => {
+                    // 通常只在第一次用戶未互動時發生
+                    console.warn(`無法播放音效`, error);
+                });
+            }
+
+            function playNextTrack() {
+                // 1. 停止當前音樂並清除資源
+                if (currentAudio) {
+                    currentAudio.pause();
+                    currentAudio.src = ''; 
+                }
+
+                // 2. 確定下一首曲目的索引，並實現循環
+                currentTrackIndex = Math.floor(Math.random() * musicPlaylist.length);
+                
+                const trackName = musicPlaylist[currentTrackIndex];
+                
+                // 3. 構造完整路徑 (直接拼接無空格的文件名)
+                const fullPath = MUSIC_BASE_PATH + trackName + '.mp3'; // 假設使用 .mp3 格式
+                
+                // 4. 建立新的 Audio 物件
+                currentAudio = new Audio(fullPath);
+                currentAudio.loop = false;
+
+                // 5. 設置音量
+                currentAudio.volume = 0.5; 
+
+                // 6. 監聽音樂結束事件：播放完畢後，自動切換下一首
+                currentAudio.addEventListener('ended', playNextTrack);
+                
+                // 7. 開始播放
+                currentAudio.play().catch(error => {
+                    console.warn(`無法自動播放背景音樂 ${trackName}. 請確保用戶已互動。`, error);
+                });
+
+                console.log(`開始播放曲目: ${trackName}`);
+            }
+
+            function startBGM() {
+                if (isMusicPlaying) {
+                    return;
+                }
+                
+                isMusicPlaying = true;
+                playNextTrack();
+                
+                console.log("背景音樂播放器已啟動。");
+            }
+
+            //recipes 在 recipes.js 中
+
+            function checkCrafting() {
+                // --- 檢查非定型配方 (soft_recipes) ---
+                // 獲取合成格中所有非空物品的類型
+                const currentItems = craftingGrid.filter(item => item !== null).map(item => item.type);
+                
+                for (const recipe of soft_recipes) {
+                    // 從配方的 input 物件中提取物品類型
+                    const recipeInput = recipe.input.map(item => item.type);
+                    
+                    // 將兩者都排序，然後比較是否相同
+                    if (currentItems.length === recipeInput.length && 
+                        JSON.stringify([...currentItems].sort()) === JSON.stringify([...recipeInput].sort())) {
+                        craftingOutput = { ...recipe.output };
+                        return craftingOutput;
+                    }
+                }
+                
+                // --- 檢查定型配方 (recipes) ---
+                // 處理定型配方
+                for (const recipe of recipes) {
+                    // 如果是背包內的 2x2 合成，只檢查 2x2 的定型配方
+                    if (!isCraftingTableOpen) {
+                        if (recipe.input.length > 2 || recipe.input[0].length > 2) {
+                            continue;
+                        }
+                    }
+
+                    if (isShapedMatch(craftingGrid, recipe.input, isCraftingTableOpen)) {
+                        craftingOutput = { ...recipe.output };
+                        return craftingOutput;
+                    }
+                }
+
+                return null;
+            }
+
+            // 輔助函式：檢查定型配方是否匹配
+            function isShapedMatch(craftingGrid, pattern, isCraftingTableOpen) {
+                const gridCols = isCraftingTableOpen ? 3 : 2;
+                const gridRows = isCraftingTableOpen ? 3 : 2;
+                const patternCols = pattern[0].length;
+                const patternRows = pattern.length;
+
+                if (patternCols > gridCols || patternRows > gridRows) {
+                    return false;
+                }
+
+                for (let startRow = 0; startRow <= gridRows - patternRows; startRow++) {
+                    for (let startCol = 0; startCol <= gridCols - patternCols; startCol++) {
+                        let match = true;
+                        for (let row = 0; row < gridRows; row++) {
+                            for (let col = 0; col < gridCols; col++) {
+                                const gridIndex = row * gridCols + col;
+                                const gridItem = craftingGrid[gridIndex] ? craftingGrid[gridIndex].type : null;
+                                
+                                let patternItem = null;
+                                if (row >= startRow && row < startRow + patternRows && col >= startCol && col < startCol + patternCols) {
+                                    patternItem = pattern[row - startRow][col - startCol];
+                                }
+                                
+                                if (gridItem !== patternItem) {
+                                    match = false;
+                                    break;
+                                }
+                            }
+                            if (!match) break;
+                        }
+                        if (match) {
+                            return true;
+                        }
+                    }
+                }
+
+                return false;
+            }
+
+            function loadImages() {
+                return new Promise((resolve) => {
+                    // 使用 Object.keys() 取得所有物品名稱
+                    const itemNames = Object.keys(ITEM_DATA);
+                    
+                    // 這邊的 totalImagesToLoad 應包含所有物品和其他特殊圖片
+                    totalImagesToLoad = itemNames.length + 1 + 10 + 3 + 1;
+
+                    missingTextureImage.onload = () => {
+                        imagesLoaded++;
+                        if (imagesLoaded === totalImagesToLoad) resolve();
+                    };
+                    missingTextureImage.src = 'minecraft/missing_texture.png';
+
+                    // 將兩個 forEach 迴圈合併為一個
+                    itemNames.forEach(itemName => {
+                        const img = new Image();
+                        img.onload = () => {
+                            blockImages[itemName] = img;
+                            imagesLoaded++;
+                            if (imagesLoaded === totalImagesToLoad) resolve();
+                        };
+                        img.onerror = () => {
+                            blockImages[itemName] = missingTextureImage;
+                            imagesLoaded++;
+                            if (imagesLoaded === totalImagesToLoad) resolve();
+                        };
+                        img.src = `minecraft/assets/${itemName}.png`;
+                    });
+
+                    steveImage.onload = () => {
+                        imagesLoaded++;
+                        if (imagesLoaded === totalImagesToLoad) resolve();
+                    };
+                    steveImage.onerror = () => {
+                        steveImage = null; 
+                        imagesLoaded++;
+                        if (imagesLoaded === totalImagesToLoad) resolve();
+                    };
+                    steveImage.src = 'minecraft/steve.png';
+
+                    for (let i = 0; i < 3; i++) {
+                        const img = new Image();
+                        img.onload = () => {
+                            healthImage[i] = img;
+                            imagesLoaded++;
+                            if (imagesLoaded === totalImagesToLoad) resolve();
+                        };
+                        img.onerror = () => {
+                            healthImage[i] = missingTextureImage;
+                            imagesLoaded++;
+                            if (imagesLoaded === totalImagesToLoad) resolve();
+                        };
+
+                        if (i === 0) img.src = 'minecraft/health_full.png';
+                        else if (i === 1) img.src = 'minecraft/health_half.png';
+                        else img.src = 'minecraft/health_empty.png';
+                    }
+
+                    for (let i = 0; i < 10; i++) {
+                        const img = new Image();
+                        img.onload = () => {
+                            destroyStageImages[i] = img;
+                            imagesLoaded++;
+                            if (imagesLoaded === totalImagesToLoad) resolve();
+                        };
+                        img.onerror = () => {
+                            destroyStageImages[i] = missingTextureImage;
+                            imagesLoaded++;
+                            if (imagesLoaded === totalImagesToLoad) resolve();
+                        };
+                        img.src = `minecraft/dig${i + 1}.png`;
+                    }
+                });
+            }
+            
+            const perlin = (() => {
+                const grad = (i, x, y) => {
+                    const h = i & 15;
+                    const u = h < 8 ? x : y;
+                    const v = h < 4 ? y : h === 12 || h === 14 ? x : 0;
+                    return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v);
+                };
+                const p = new Uint8Array(512);
+                for (let i = 0; i < 256; i++) p[i] = i;
+                for (let i = 0; i < 255; i++) {
+                    const j = Math.floor(Math.random() * (256 - i)) + i;
+                    [p[i], p[j]] = [p[j], p[i]];
+                }
+                for (let i = 0; i < 256; i++) p[i + 256] = p[i];
+                const fade = t => t * t * t * (t * (t * 6 - 15) + 10);
+                const lerp = (a, b, t) => (1 - t) * a + t * b;
+                return (x, y) => {
+                    const X = Math.floor(x) & 255, Y = Math.floor(y) & 255;
+                    x -= Math.floor(x);
+                    y -= Math.floor(y);
+                    const u = fade(x), v = fade(y);
+                    const A = p[X] + Y, B = p[X + 1] + Y;
+                    return lerp(lerp(grad(p[A], x, y), grad(p[B], x - 1, y), u),
+                                lerp(grad(p[A + 1], x, y - 1), grad(p[B + 1], x - 1, y - 1), u), v);
+                };
+            })();
+
+            function createWorld() {
+                gameWorld = new Array(WORLD_HEIGHT).fill(null).map(() => new Array(WORLD_WIDTH).fill('air'));
+                const groundHeights = new Array(WORLD_WIDTH);
+                const baseHeight = 60;
+                
+                const mountainNoiseScale = 0.005; // 控制山脈區域的寬度
+                const mountainThreshold = 0.1; // 控制山脈出現的機率
+                
+                const terrainNoiseScale = 0.03; // 數值越小，山脈會越寬
+                const terrainDetailScale = 0.1; // 數值越小，山頂會越平滑
+                
+                for (let x = 0; x < WORLD_WIDTH; x++) {
+                    const terrainTypeNoise = perlin(x * mountainNoiseScale, 0);
+                    let heightOffset;
+
+                    if (terrainTypeNoise > mountainThreshold) {
+                        // 高山區域
+                        const noiseValue = perlin(x * terrainNoiseScale, 0); 
+                        const detailNoiseValue = perlin(x * terrainDetailScale, 0);
+                        const mountainScale = 50; 
+                        const detailScale = 10;
+                        heightOffset = Math.floor(noiseValue * mountainScale + detailNoiseValue * detailScale);
+                    } else {
+                        // 平原區域
+                        const plainsNoiseValue = perlin(x * 0.1, 0); 
+                        const plainsScale = 5;
+                        heightOffset = Math.floor(plainsNoiseValue * plainsScale);
+                    }
+                    groundHeights[x] = baseHeight + heightOffset;
+                }
+
+                for (let y = BEDROCK_LAYER_Y; y < WORLD_HEIGHT + BEDROCK_LAYER_Y; y++) {
+                    for (let x = 0; x < WORLD_WIDTH; x++) {
+                        const arrayY = y - BEDROCK_LAYER_Y;
+                        if (y === BEDROCK_LAYER_Y) { 
+                            gameWorld[arrayY][x] = 'bedrock';
+                        } else if (y === groundHeights[x]) {
+                            gameWorld[arrayY][x] = 'grass_block';
+                        } else if (y < groundHeights[x] && y > BEDROCK_LAYER_Y) {
+                            const soilDepth = groundHeights[x] - y;
+                            const maxDirtDepth = 5;
+
+                            if (soilDepth <= maxDirtDepth) {
+                                gameWorld[arrayY][x] = 'dirt';
+                            } else {
+                                const pureDeepslateStartDepth = -48;
+                                const deepslateStartDepth = 0;
+                                
+                                if (y < pureDeepslateStartDepth) {
+                                    gameWorld[arrayY][x] = 'deepslate';
+                                } else if (y < deepslateStartDepth) {
+                                    const transitionRatio = (deepslateStartDepth - y) / (deepslateStartDepth - pureDeepslateStartDepth);
+                                    if (Math.random() < transitionRatio) {
+                                        gameWorld[arrayY][x] = 'deepslate';
+                                    } else {
+                                        gameWorld[arrayY][x] = 'stone';
+                                    }
+                                } else {
+                                    gameWorld[arrayY][x] = 'stone';
+                                }
+
+                                // 礦物生成邏輯
+                                const oreSpawnChance = 0.05; // 基礎生成機率
+                                const oreNoise = perlin(x * 0.1, y * 0.1);
+
+                                if (gameWorld[arrayY][x] === 'stone' || gameWorld[arrayY][x] === 'deepslate') {
+                                    if (y >= -16 && y < 65 && Math.random() < oreSpawnChance * (1 - Math.abs(oreNoise)) && Math.random() < 0.2) {
+                                        gameWorld[arrayY][x] = 'coal_ore';
+                                    } else if (y >= -20 && y < 35 && Math.random() < oreSpawnChance * (1 - Math.abs(oreNoise)) && Math.random() < 0.15) {
+                                        gameWorld[arrayY][x] = 'iron_ore';
+                                    } else if (y >= -50 && y < 20 && Math.random() < oreSpawnChance * (1 - Math.abs(oreNoise)) && Math.random() < 0.05) {
+                                        gameWorld[arrayY][x] = 'gold_ore';
+                                    } else if (y >= -64 && y < 0 && Math.random() < oreSpawnChance * (1 - Math.abs(oreNoise)) && Math.random() < 0.01) {
+                                        gameWorld[arrayY][x] = 'diamond_ore';
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                const caveNoiseScaleX = 0.04;
+                const caveNoiseScaleY = 0.02;
+                const caveThreshold = 0.05; // 主要洞穴系統的密度
+                
+                // 洞穴生成邏輯
+                for (let y = BEDROCK_LAYER_Y + 1; y < WORLD_HEIGHT + BEDROCK_LAYER_Y; y++) {
+                    for (let x = 0; x < WORLD_WIDTH; x++) {
+                        const arrayY = y - BEDROCK_LAYER_Y;
+                        if (arrayY < 0 || arrayY >= WORLD_HEIGHT || ITEM_DATA[gameWorld[arrayY][x]]?.isSolid === false) {
+                            continue;
+                        }
+
+                        // 地下洞穴生成邏輯
+                        const depth = groundHeights[x] - y;
+                        // 確保在不同深度有不同的生成機率，但維持洞穴大小
+                        const caveThreshold = 0.05;
+
+                        // 主要洞穴系統，頻率更低，確保更寬、更平滑
+                        const mainCaveNoise = perlin(x * 0.02, y * 0.01);
+                        
+                        // 根據深度計算一個平滑的衰減係數
+                        const depthFade = Math.min(1.0, depth / 15);
+                        
+                        // 結合雜訊和深度，讓洞穴越往上越稀有
+                        const isMainCave = Math.abs(mainCaveNoise) < caveThreshold * depthFade;
+
+                        // 山體洞口生成邏輯
+                        const isMountain = groundHeights[x] > baseHeight + 10;
+                        const isMountainCave = isMountain && y > groundHeights[x] - 10 && y < groundHeights[x] - 2 && (Math.random() < 0.005);
+                        
+                        // 移除所有在山體洞口上方的實體方塊
+                        if (isMountainCave) {
+                            let checkY = y;
+                            while (checkY < groundHeights[x] && ITEM_DATA[getBlockType(x, checkY)]?.isSolid) {
+                                const checkArrayY = checkY - BEDROCK_LAYER_Y;
+                                if (checkArrayY >= 0 && checkArrayY < WORLD_HEIGHT) {
+                                    gameWorld[checkArrayY][x] = 'air';
+                                }
+                                checkY++;
+                            }
+                        }
+                        
+                        // 如果是洞穴，將方塊變為空氣
+                        if (isMainCave || isMountainCave) {
+                            gameWorld[arrayY][x] = 'air';
+                        }
+                    }
+                }
+                
+                for (let x = 0; x < WORLD_WIDTH; x++) {
+                    const ground_y = groundHeights[x];
+                    const groundArrayY = ground_y - BEDROCK_LAYER_Y;
+                    
+                    if (groundArrayY >= 0 && groundArrayY < WORLD_HEIGHT && gameWorld[groundArrayY][x] === 'grass_block' && Math.random() < 0.05) { 
+                        const treeHeight = Math.floor(Math.random() * 3) + 4;
+                        for (let i = 0; i < treeHeight; i++) {
+                            const treeY = ground_y + i + 1;
+                            const arrayY = treeY - BEDROCK_LAYER_Y;
+                            if (arrayY >= 0 && arrayY < WORLD_HEIGHT) {
+                                gameWorld[arrayY][x] = 'oak_log';
+                            }
+                        }
+                        
+                        const topLogY = ground_y + treeHeight;
+                        for (let layer = 0; layer < 2; layer++) {
+                            const currentLeavesY = topLogY + 1 + layer;
+                            const currentLeavesArrayY = currentLeavesY - BEDROCK_LAYER_Y;
+
+                            for (let dx = -1; dx <= 1; dx++) {
+                                const leafX = x + dx;
+                                const leafArrayY = currentLeavesArrayY; 
+
+                                if (leafX >= 0 && leafX < WORLD_WIDTH &&
+                                    leafArrayY >= 0 && leafArrayY < WORLD_HEIGHT &&
+                                    gameWorld[leafArrayY][leafX] === 'air') {
+                                    gameWorld[leafArrayY][leafX] = 'oak_leaves';
+                                }
+                            }
+                        }
+
+                        const topSingleLeafY = topLogY + 3;
+                        const topSingleLeafArrayY = topSingleLeafY - BEDROCK_LAYER_Y;
+                        if (topSingleLeafArrayY >= 0 && topSingleLeafArrayY < WORLD_HEIGHT && gameWorld[topSingleLeafArrayY][x] === 'air') {
+                            gameWorld[topSingleLeafArrayY][x] = 'oak_leaves';
+                        }
+                    }
+                }
+                
+                for (let y = BEDROCK_LAYER_Y; y < WORLD_HEIGHT + BEDROCK_LAYER_Y; y++) {
+                    const arrayY = y - BEDROCK_LAYER_Y;
+                    if (arrayY < 1 || arrayY >= WORLD_HEIGHT) continue;
+                    for (let x = 0; x < WORLD_WIDTH; x++) {
+                        if (gameWorld[arrayY][x] === 'grass_block') {
+                            const blockAbove = (arrayY + 1 < WORLD_HEIGHT) ? gameWorld[arrayY + 1][x] : 'air';
+                            if (ITEM_DATA[blockAbove]?.isSolid) {
+                                gameWorld[arrayY][x] = 'dirt';
+                            }
+                        }
+                    }
+                }
+            }
+            
+            function checkSkylight(x, y) {
+                const arrayY = y - BEDROCK_LAYER_Y;
+                if (arrayY < 0 || arrayY >= WORLD_HEIGHT || x < 0 || x >= WORLD_WIDTH) {
+                    return false;
+                }
+                for (let i = arrayY + 1; i < WORLD_HEIGHT; i++) {
+                    if (ITEM_DATA[gameWorld[i][x]]?.isSolid) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            function resizeAndRecalculate() {
+                const navHeight = 50;
+                const windowWidth = window.innerWidth;
+                const windowHeight = window.innerHeight - navHeight;
+
+                const baseWidth = WORLD_WIDTH * BLOCK_SIZE;
+                const baseHeight = WORLD_HEIGHT * BLOCK_SIZE;
+
+                const scaleX = windowWidth / baseWidth;
+                const scaleY = windowHeight / baseHeight;
+                const scale = Math.min(scaleX, scaleY);
+                
+                const roundedScale = Math.floor(scale);
+                const finalScale = Math.max(1, roundedScale);
+                
+                canvas.width = windowWidth / finalScale;
+                canvas.height = windowHeight / finalScale;
+                canvas.style.transform = `scale(${finalScale})`;
+                canvas.style.transformOrigin = `0 0`;
+                
+                canvas.width = Math.floor(windowWidth / finalScale);
+                canvas.height = Math.floor(windowHeight / finalScale);
+
+                canvas.style.width = `${canvas.width * finalScale}px`;
+                canvas.style.height = `${canvas.height * finalScale}px`;
+                
+                gridSizeX = Math.floor(canvas.width / BLOCK_SIZE);
+                gridSizeY = Math.floor(canvas.height / BLOCK_SIZE);
+            }
+
+            function updateCamera() {
+                camera.x = player.x - gridSizeX / 2;
+                camera.y = player.y - gridSizeY / 2;
+
+                camera.x = Math.max(0, Math.min(camera.x, WORLD_WIDTH - gridSizeX));
+                camera.y = Math.max(BEDROCK_LAYER_Y, Math.min(camera.y, WORLD_HEIGHT + BEDROCK_LAYER_Y - gridSizeY));
+            }
+
+            function drawPlayer() {
+                const playerScreenX = (player.x - camera.x) * BLOCK_SIZE;
+                const playerScreenY = canvas.height - ((player.y - camera.y) * BLOCK_SIZE) - BLOCK_SIZE * PLAYER_HEIGHT;
+                const img = steveImage || missingTextureImage;
+                if (img) { 
+                    ctx.drawImage(img, playerScreenX, playerScreenY, BLOCK_SIZE, BLOCK_SIZE * PLAYER_HEIGHT);
+                } else {
+                    ctx.fillStyle = '#f00';
+                    ctx.fillRect(playerScreenX, playerScreenY, BLOCK_SIZE, BLOCK_SIZE * PLAYER_HEIGHT);
+                }
+            }
+            
+            function drawDroppedItems() {
+                const itemSize = BLOCK_SIZE / 2;
+                droppedItems.forEach(item => {
+                    const img = blockImages[item.type] || missingTextureImage;
+                    if (img) {
+                        const screenX = (item.x + 0.25 - camera.x) * BLOCK_SIZE;
+                        const screenY = canvas.height - (item.y - camera.y) * BLOCK_SIZE - (BLOCK_SIZE / 2); // 修正後的 Y 座標計算
+                        drawBlock(item.type, screenX, screenY, itemSize, itemSize);
+                    }
+                });
+            }
+
+            function drawHealth() {
+                const health = playerHealth;
+                const maxHealth = playerMaxHealth;
+                
+                // UI 常數
+                const HEART_SIZE = 18;
+                const SPACING = 2;
+                const HOTBAR_SLOT_TOTAL_SIZE = BLOCK_SIZE + 4; // 物品欄單格總大小
+                const HOTBAR_BOTTOM_OFFSET = 20;
+                
+                // 1. 計算血條的總像素寬度 (為了知道從中心向左偏移多少)
+                const totalHearts = maxHealth / 2; 
+                const HEALTH_BAR_WIDTH = (totalHearts * (HEART_SIZE + SPACING)) - SPACING;
+                
+                // 2. 計算 X 軸起點：
+                // X_START = 畫布中心 - 血條總寬度
+                const CANVAS_CENTER_X = canvas.width / 2;
+                const renderXStart = CANVAS_CENTER_X - HEALTH_BAR_WIDTH; // 【關鍵修正】
+                
+                // 3. 計算血條的繪製 Y 軸位置 (保持不變)
+                const UI_START_Y = canvas.height 
+                                - HOTBAR_BOTTOM_OFFSET 
+                                - HOTBAR_SLOT_TOTAL_SIZE 
+                                - 10        // 血條和熱鍵欄之間的額外間距 (10px)
+                                - HEART_SIZE; 
+                
+                // 4. 迴圈繪製心形圖示
+                for (let i = 0; i < totalHearts; i++) {
+                    let imageIndex = 2; 
+                    const heartValue = (i + 1) * 2; 
+
+                    if (health >= heartValue) {
+                        imageIndex = 0; 
+                    } else if (health === heartValue - 1) {
+                        imageIndex = 1; 
+                    }
+                    
+                    const imgToDraw = healthImage[imageIndex];
+
+                    // 最終繪製 X 座標
+                    const renderX = renderXStart + (i * (HEART_SIZE + SPACING)); 
+                    const renderY = UI_START_Y;
+
+                    if (imgToDraw) {
+                        ctx.drawImage(imgToDraw, renderX, renderY, HEART_SIZE, HEART_SIZE);
+                    }
+                }
+            }
+
+            function drawMap() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                const startX = Math.floor(camera.x);
+                const startY = Math.floor(camera.y);
+
+                for (let y = startY; y < startY + gridSizeY + 1; y++) {
+                    for (let x = startX; x < startX + gridSizeX + 1; x++) {
+                        
+                        const arrayY = y - BEDROCK_LAYER_Y;
+                        
+                        // 邊界檢查
+                        if (arrayY < 0 || arrayY >= WORLD_HEIGHT || x < 0 || x >= WORLD_WIDTH) {
+                            continue;
+                        }
+
+                        const blockName = gameWorld[arrayY][x];
+                        const blockData = ITEM_DATA[blockName]; // <--- 關鍵：獲取方塊資料物件
+
+                        // 如果是空氣或資料不存在，則跳過
+                        if (blockName === 'air') {
+                            continue;
+                        }
+
+                        const screenX = (x - camera.x) * BLOCK_SIZE;
+                        const screenY = canvas.height - ((y - camera.y) * BLOCK_SIZE) - BLOCK_SIZE;
+
+                        // 1. 檢查是否為動畫方塊 (isAnimated)
+                        if (blockData?.isAnimated) {
+                            
+                            // --- 動畫方塊繪製邏輯 (使用九參數 drawImage) ---
+                            const image = blockImages[blockName]; // 假設 blockImages 鍵是 displayName
+                            
+                            if (image) {
+                                const SOURCE_FRAME_WIDTH = 160; 
+                                const SOURCE_FRAME_HEIGHT = 160;
+                                
+                                // 通用動畫計算
+                                const frameIndex = currentBlockFrame % blockData.animationFrames; 
+
+                                ctx.drawImage(
+                                    image, 
+                                    // 裁剪源圖的參數 (sX, sY, sW, sH)
+                                    0,                                   
+                                    frameIndex * SOURCE_FRAME_HEIGHT,    
+                                    SOURCE_FRAME_WIDTH,                  
+                                    SOURCE_FRAME_HEIGHT,                 
+                                    // 繪製到 Canvas 的參數 (dX, dY, dW, dH)
+                                    screenX, 
+                                    screenY, 
+                                    BLOCK_SIZE,                          
+                                    BLOCK_SIZE
+                                );
+                            }
+                        } 
+                        // 2. 否則，繪製靜態方塊
+                        else {
+                            // --- 靜態方塊繪製邏輯 (使用五參數 drawImage) ---
+                            const img = blockImages[blockName] || missingTextureImage; // 使用 blockName 查找靜態圖片
+                            
+                            if (img) {
+                                // 這是你的原始靜態繪圖程式碼
+                                ctx.drawImage(img, screenX, screenY, BLOCK_SIZE, BLOCK_SIZE); 
+                            }
+                        }
+
+                        // *** 挖掘進度覆蓋繪圖：這段邏輯可以保留在外面 ***
+                        // 只要確保挖掘進度覆蓋在方塊和動畫幀之後即可
+                        
+                        if (player.digging.isDigging && player.digging.targetBlock.x === x && player.digging.targetBlock.y === y) {
+                            const currentBlockType = gameWorld[arrayY][x];
+                            const blockData = ITEM_DATA[currentBlockType];
+
+                            // 獲取手持物品資料，用於計算工具加成
+                            const heldItem = hotbar[selectedSlot];
+                            const heldItemData = heldItem ? ITEM_DATA[heldItem.type] : null;
+
+                            // 計算挖掘時間的倍率 (與挖掘邏輯完全同步)
+                            let breakTimeMultiplier = 1;
+                            if (heldItemData?.isTool && blockData?.harvestTool) {
+                                if (heldItemData.toolType === blockData.harvestTool && heldItemData.toolLevel >= blockData.minToolLevel) {
+                                    breakTimeMultiplier /= (2 * heldItemData.toolLevel);
+                                }
+                            }
+                            
+                            // 計算最終所需的挖掘時間 (以毫秒為單位)
+                            const finalBreakTime = blockData?.breakTime * breakTimeMultiplier;
+
+                            if (finalBreakTime !== Infinity) {
+                                const progress = player.digging.progress;
+                                
+                                // 使用新的 finalBreakTime 來計算破裂階段
+                                const stage = Math.floor((progress / finalBreakTime) * 10);
+                                
+                                const destroyImg = destroyStageImages[stage] || missingTextureImage;
+                                if (destroyImg) {
+                                    const screenX = (x - camera.x) * BLOCK_SIZE;
+                                    const screenY = canvas.height - ((y - camera.y) * BLOCK_SIZE) - BLOCK_SIZE;
+                                    ctx.drawImage(destroyImg, screenX, screenY, BLOCK_SIZE, BLOCK_SIZE);
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                if (hoveredBlock) {
+                    const { x, y } = hoveredBlock;
+                    const arrayY = y - BEDROCK_LAYER_Y;
+
+                    if (arrayY >= 0 && arrayY < WORLD_HEIGHT && x >= 0 && x < WORLD_WIDTH && ITEM_DATA[gameWorld[arrayY][x]]?.isBlock) {
+                        const screenX = (x - camera.x) * BLOCK_SIZE;
+                        const screenY = canvas.height - ((y - camera.y) * BLOCK_SIZE) - BLOCK_SIZE;
+
+                        ctx.strokeStyle = 'black'; 
+                        ctx.lineWidth = 2;
+                        ctx.strokeRect(screenX, screenY, BLOCK_SIZE, BLOCK_SIZE);
+                        ctx.lineWidth = 2; 
+                    } else {
+                        hoveredBlock = null;
+                    }
+                }
+
+                if (!isPlayerDead) drawPlayer();
+                drawDroppedItems();
+                if (!isPlayerDead) drawInventory();
+                if (!isPlayerDead && !isInventoryOpen) drawHealth();
+
+                if (mouseHeldItem) {
+                    const img = blockImages[mouseHeldItem.type] || missingTextureImage;
+                    if (img) {
+                        drawBlock(mouseHeldItem.type, mouse.canvasX - (BLOCK_SIZE / 2), mouse.canvasY - (BLOCK_SIZE / 2), BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+                        
+                        if (mouseHeldItem.count > 1) {
+                            ctx.font = 'bold 20px MinecraftFont, sans-serif';
+                            ctx.textAlign = 'right';
+                            ctx.textBaseline = 'bottom';
+                            ctx.strokeStyle = '#000';
+                            ctx.lineWidth = 1;
+                            ctx.strokeText(mouseHeldItem.count, mouse.canvasX + (BLOCK_SIZE / 2) - 2, mouse.canvasY + (BLOCK_SIZE / 2) - 2);
+                            ctx.fillStyle = '#fff';
+                            ctx.fillText(mouseHeldItem.count, mouse.canvasX + (BLOCK_SIZE / 2) - 2, mouse.canvasY + (BLOCK_SIZE / 2) - 2);
+                        }
+                    }
+                }
+
+                if (itemDisplayNameTimer > 0 && !mouseHeldItem) {
+                    if (isInventoryOpen && currentItemDisplayName == "") return;
+                    if (isInventoryOpen) itemDisplayNameTimer = 1;
+
+                    const alpha = itemDisplayNameAlpha;
+                    ctx.globalAlpha = alpha;
+                    
+                    // 定義 Tooltip 繪圖函數
+                    const drawTooltip = (x, y, textAlign = 'center') => {
+                        ctx.font = '24px MinecraftFont, sans-serif';
+                        ctx.textAlign = textAlign;
+
+                        // 測量文字寬度以動態調整背景大小
+                        const textWidth = ctx.measureText(currentItemDisplayName).width;
+                        const padding = 10;
+                        const rectWidth = textWidth + padding * 2;
+                        const rectHeight = 35;
+                        const rectX = textAlign === 'center' ? x - rectWidth / 2 : x;
+                        const rectY = textAlign === 'center' ? y - rectHeight / 2 - 5 : y;
+                        const notchSize = 3;
+                        
+                        // 繪製帶有直角凹口的矩形背景
+                        ctx.fillStyle = `rgba(32, 32, 32, ${alpha * 0.8})`;
+                        ctx.strokeStyle = `rgba(60, 60, 255, ${alpha})`;
+                        ctx.lineWidth = 1.5;
+
+                        ctx.beginPath();
+                        ctx.moveTo(rectX + notchSize, rectY);
+                        ctx.lineTo(rectX + rectWidth - notchSize, rectY);
+                        ctx.lineTo(rectX + rectWidth - notchSize, rectY + notchSize);
+                        ctx.lineTo(rectX + rectWidth, rectY + notchSize);
+                        ctx.lineTo(rectX + rectWidth, rectY + rectHeight - notchSize);
+                        ctx.lineTo(rectX + rectWidth - notchSize, rectY + rectHeight - notchSize);
+                        ctx.lineTo(rectX + rectWidth - notchSize, rectY + rectHeight);
+                        ctx.lineTo(rectX + notchSize, rectY + rectHeight);
+                        ctx.lineTo(rectX + notchSize, rectY + rectHeight - notchSize);
+                        ctx.lineTo(rectX, rectY + rectHeight - notchSize);
+                        ctx.lineTo(rectX, rectY + notchSize);
+                        ctx.lineTo(rectX + notchSize, rectY + notchSize);
+                        ctx.lineTo(rectX + notchSize, rectY);
+                        ctx.closePath();
+                        
+                        ctx.fill();
+                        if (isInventoryOpen) ctx.stroke();
+
+                        // 繪製文字
+                        ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+                        ctx.strokeStyle = `rgba(70, 70, 70, ${alpha})`;
+                        ctx.lineWidth = 2;
+                        
+                        // 根據對齊方式，精準定位文字
+                        ctx.strokeText(currentItemDisplayName, x + 2, y + 9);
+                        ctx.fillText(currentItemDisplayName, x, y + 7);
+                    };
+
+                    // 熱鍵欄 Tooltip (背包關閉時)
+                    if (!isInventoryOpen) {
+                        const slotSize = BLOCK_SIZE + 4;
+                        const hotbarWidth = HOTBAR_SIZE * slotSize;
+                        const hotbarStartY = canvas.height - slotSize - 20;
+
+                        const tooltipX = canvas.width / 2;
+                        const tooltipY = hotbarStartY - 20;
+                        
+                        drawTooltip(tooltipX, tooltipY);
+                    } 
+                    // 背包 Tooltip (背包開啟時且游標懸停在物品上)
+                    else if (isInventoryOpen && hoveredSlot !== null && !mouseHeldItem) {
+                        const tooltipX = mouse.canvasX + 40 + ctx.measureText(currentItemDisplayName).width / 2;
+                        const tooltipY = mouse.canvasY + 10;
+                        
+                        drawTooltip(tooltipX, tooltipY, 'center');
+                    }
+                    else
+                    {
+                        itemDisplayNameTimer = 0;
+                        itemDisplayNameAlpha = 0;
+                    }
+                }
+                
+                ctx.globalAlpha = 1.0;
+            }
+
+            function takeDamage(damageAmount, damageType) {
+                // 1. 檢查無敵時間：如果在無敵狀態，則直接結束函式
+                // if (playerInvulnerabilityTime > 0) {
+                //     return; 
+                // }
+
+                // 2. 扣除血量
+                playerHealth -= damageAmount;
+
+                playSound('player_hurt');
+
+                // 3. 設置無敵時間：讓玩家在短時間內不會連續受傷
+                playerInvulnerabilityTime = INVULNERABILITY_DURATION;
+
+                // 4. 檢查死亡
+                if (playerHealth <= 0) {
+                    playerHealth = 0;
+                    // 這裡你需要呼叫一個專門處理死亡的函式
+                    handlePlayerDeath(damageType); 
+                }
+            }
+
+            async function handlePlayerDeath(damageType = DAMAGE_TYPE.GENERIC) {
+                // 1. 設置玩家死亡狀態
+                isPlayerDead = true;
+                isInventoryOpen = false;
+                isCraftingTableOpen = false;
+                if (isChatOpen) toggleChat(false);
+                
+                // 2. 確定死亡訊息 (用於死亡畫面)
+                deathMessage = DEATH_MESSAGES[damageType] || DEATH_MESSAGES[DAMAGE_TYPE.GENERIC];
+
+                deathScreen.classList.remove('hidden');
+                await sleep(10);
+                deathScreen.classList.add('is-visible'); 
+    
+                // *** 更新介面上的訊息內容 ***
+                deathReasonElement.textContent = "Player " + deathMessage;
+                addChatMessage("Player " + deathMessage);
+            }
+
+            function respawnPlayer() {
+                showToast("Respawned!");
+                // 1. 重置玩家生命和死亡狀態
+                playerHealth = playerMaxHealth;
+                isPlayerDead = false; // <-- 關鍵：允許玩家再次操控
+
+                deathScreen.classList.add('hidden');
+                deathScreen.classList.remove('is-visible');
+
+                // 2. 重置玩家位置 (回到出生點)
+                player.x = spawnX;
+                player.y = spawnY;
+
+                maxFallY = spawnY;
+                
+                // 3. (可選) 清除畫面上的死亡訊息
+                deathMessage = "";
+            }
+
+            respawnButton.addEventListener('click', () => {
+                // 這樣可以確保 respawnPlayer() 即使不在全域作用域中也能被正確呼叫
+                if (isPlayerDead) { 
+                    respawnPlayer();
+                }
+            });
+            
+            function getInventory() {
+                return hotbar.concat(mainInventory);
+            }
+
+            function getSlotInfo(slotIndex) {
+                if (slotIndex >= 0 && slotIndex < HOTBAR_SIZE) {
+                    return { list: hotbar, index: slotIndex };
+                } else if (slotIndex >= HOTBAR_SIZE && slotIndex < HOTBAR_SIZE + INVENTORY_SIZE) {
+                    return { list: mainInventory, index: slotIndex - HOTBAR_SIZE };
+                } else if (slotIndex >= HOTBAR_SIZE + INVENTORY_SIZE && slotIndex < HOTBAR_SIZE + INVENTORY_SIZE + CRAFTING_SIZE) {
+                    return { list: craftingGrid, index: slotIndex - (HOTBAR_SIZE + INVENTORY_SIZE) };
+                } else if (slotIndex === HOTBAR_SIZE + INVENTORY_SIZE + CRAFTING_SIZE) {
+                    return { list: [craftingOutput], index: 0 };
+                }
+                return null;
+            }
+
+            function addToInventory(itemType, count) {
+                // 1. 嘗試將物品疊加到現有的物品堆上
+                const inventory = getInventory();
+                for (let i = 0; i < inventory.length; i++) {
+                    const slotInfo = getSlotInfo(i);
+                    const slot = slotInfo.list[slotInfo.index];
+                    if (slot && slot.type === itemType && slot.count < ITEM_STACK_SIZE) {
+                        const remainingSpace = ITEM_STACK_SIZE - slot.count;
+                        const transferCount = Math.min(count, remainingSpace);
+                        slot.count += transferCount;
+                        count -= transferCount;
+                        if (count === 0) {
+                            playSound('collect');
+                            return true;
+                        }
+                    }
+                }
+                
+                // 2. 如果沒有可疊加的物品，則尋找一個空的物品欄位
+                for (let i = 0; i < inventory.length; i++) {
+                    const slotInfo = getSlotInfo(i);
+                    const slot = slotInfo.list[slotInfo.index];
+                    if (!slot) {
+                        slotInfo.list[slotInfo.index] = { type: itemType, count: count };
+                        
+                        // 這裡只顯示 Tooltip，但不切換物品欄
+                        showItemTooltip(itemType);
+                        playSound('collect');
+                        
+                        return true;
+                    }
+                }
+                
+                // 如果背包已滿，則無法撿起物品
+                return false;
+            }
+
+            function showItemTooltip(itemType) {
+                const itemName = ITEM_DATA[itemType]?.displayName || itemType;
+                currentItemDisplayName = itemName;
+                itemDisplayNameAlpha = 1;
+                itemDisplayNameTimer = ITEM_DISPLAY_SHOW_DURATION + ITEM_DISPLAY_FADE_DURATION;
+            }
+            
+            function drawTooltip(text, x, y) {
+                ctx.font = 'bold 16px MinecraftFont, sans-serif';
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'top';
+
+                const textMetrics = ctx.measureText(text);
+                const textWidth = textMetrics.width - 2;
+                const textHeight = 16;
+
+                const padding = 3;
+                const rectWidth = textWidth + padding * 2;
+                const rectHeight = textHeight + padding;
+                const rectX = x + 10;
+                const rectY = y + 10;
+
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+                ctx.fillRect(rectX, rectY, rectWidth, rectHeight);
+                
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 2;
+                ctx.strokeText(text, rectX + padding, rectY + padding);
+                ctx.fillStyle = '#fff';
+                ctx.fillText(text, rectX + padding, rectY + padding);
+            }
+
+            function drawBlock(blockName, dx, dy, dW, dH) {
+                const blockData = ITEM_DATA[blockName];
+                if (blockName === 'air') return;
+
+                // 1. 檢查是否為動畫方塊
+                if (blockData?.isAnimated) { 
+                    const image = blockImages[blockName];
+                    
+                    if (image) {
+                        // 這是火焰圖片的特定尺寸，請保持與 drawMap 一致
+                        const SOURCE_FRAME_WIDTH = 160; 
+                        const SOURCE_FRAME_HEIGHT = 160; 
+                        const frameIndex = currentBlockFrame % blockData.animationFrames; 
+
+                        // 九參數繪圖：裁剪動畫幀
+                        ctx.drawImage(
+                            image, 
+                            0,                                   
+                            frameIndex * SOURCE_FRAME_HEIGHT,    // sY: 垂直定位
+                            SOURCE_FRAME_WIDTH,                  
+                            SOURCE_FRAME_HEIGHT,                 
+                            dx,                                  // 繪製 X
+                            dy,                                  // 繪製 Y
+                            dW,                                  // 繪製寬度 (BLOCK_SIZE 或其他庫存尺寸)
+                            dH                                   // 繪製高度 (BLOCK_SIZE 或其他庫存尺寸)
+                        );
+                    }
+                } 
+                // 2. 繪製靜態方塊
+                else {
+                    const imageKey = blockName;
+                    const img = blockImages[imageKey] || missingTextureImage; 
+                    
+                    if (img) {
+                        // 五參數繪圖：靜態圖像
+                        ctx.drawImage(img, dx, dy, dW, dH); 
+                        //原本的: ctx.drawImage(img, slotX, hotbarStartY, BLOCK_SIZE, BLOCK_SIZE);
+                    }
+                }
+            }
+
+            function drawInventory() {
+                const slotSize = BLOCK_SIZE + 4;
+                const hotbarWidth = HOTBAR_SIZE * slotSize;
+                const hotbarStartX = (canvas.width - hotbarWidth) / 2;
+                const hotbarStartY = canvas.height - slotSize - 20;
+                const inventoryWidth = INVENTORY_COLS * slotSize;
+
+                if (!isInventoryOpen)
+                {
+                    // 繪製熱鍵欄
+                    for (let i = 0; i < HOTBAR_SIZE; i++) {
+                        const slotX = hotbarStartX + i * slotSize;
+                        const item = hotbar[i];
+                        const isSelected = i === selectedSlot;
+                        const isHovered = i === hoveredSlot;
+                        
+                        ctx.fillStyle = 'rgba(67, 67, 67, 0.8)';
+                        ctx.strokeStyle = isHovered || isSelected ? '#ffffff' : 'rgba(255, 255, 255, 0.5)';
+                        ctx.lineWidth = isHovered || isSelected ? 3 : 2;
+                        ctx.fillRect(slotX, hotbarStartY, BLOCK_SIZE, BLOCK_SIZE);
+                        ctx.strokeRect(slotX, hotbarStartY, BLOCK_SIZE, BLOCK_SIZE);
+
+                        if (item && item.type) {
+                            const img = blockImages[item.type] || missingTextureImage;
+                            if (img) {
+                                drawBlock(item.type, slotX, hotbarStartY, BLOCK_SIZE, BLOCK_SIZE);
+                                if (item.count > 1) {
+                                    ctx.font = 'bold 20px MinecraftFont, sans-serif';
+                                    ctx.textAlign = 'right';
+                                    ctx.textBaseline = 'bottom';
+                                    ctx.strokeStyle = '#000';
+                                    ctx.lineWidth = 1;
+                                    ctx.strokeText(item.count, slotX + BLOCK_SIZE - 2, hotbarStartY + BLOCK_SIZE - 2);
+                                    ctx.fillStyle = '#fff';
+                                    ctx.fillText(item.count, slotX + BLOCK_SIZE - 2, hotbarStartY + BLOCK_SIZE - 2);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // 如果背包開啟，則繪製整個背包介面（包含合成區、背包和熱鍵欄）
+                
+                    const craftingGridCols = isCraftingTableOpen ? 3 : 2; // 根據狀態選擇合成格大小
+                    const craftingGridRows = isCraftingTableOpen ? 3 : 2;
+                    const craftingHeight = craftingGridRows * slotSize;
+                    const titleHeight = 25;
+                    const fullUIWidth = Math.max(hotbarWidth, craftingGridCols * slotSize);
+                    const fullUIHeight = craftingHeight + titleHeight + INVENTORY_ROWS * slotSize + 5 + slotSize;
+
+                    const inventoryStartX = (canvas.width - fullUIWidth) / 2;
+                    const inventoryStartY = (canvas.height - fullUIHeight) / 2;
+                    let currentY = inventoryStartY;
+
+                    ctx.fillStyle = 'rgba(67, 67, 67, 0.8)';
+                    ctx.fillRect(inventoryStartX - 2, currentY - 2 - 15, fullUIWidth, fullUIHeight + 40);
+
+                    // --- 繪製合成區 ---
+                    const craftingGridStartX = inventoryStartX + (fullUIWidth - craftingGridCols * slotSize - slotSize - 20) / 2;
+                    const craftingGridStartY = currentY + 10;
+
+                    ctx.font = 'bold 22px MinecraftFont, sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'top';
+                    ctx.strokeStyle = '#000';
+                    ctx.lineWidth = 2;
+                    ctx.strokeText("Crafting", inventoryStartX + 155 + 1, currentY + 1 - 15);
+                    ctx.fillStyle = '#fff';
+                    ctx.fillText("Crafting", inventoryStartX + 155, currentY - 15);
+                    
+                    for (let i = 0; i < craftingGridCols * craftingGridRows; i++) {
+                        const row = Math.floor(i / craftingGridCols);
+                        const col = i % craftingGridCols;
+                        const slotX = craftingGridStartX + col * slotSize;
+                        const slotY = craftingGridStartY + row * slotSize;
+                        const isHovered = (i + HOTBAR_SIZE + INVENTORY_SIZE) === hoveredSlot;
+                        
+                        ctx.fillStyle = 'rgba(67, 67, 67, 0.8)';
+                        ctx.strokeStyle = isHovered ? '#ffffff' : 'rgba(255, 255, 255, 0.5)';
+                        ctx.lineWidth = isHovered ? 3 : 2;
+                        ctx.fillRect(slotX, slotY, BLOCK_SIZE, BLOCK_SIZE);
+                        ctx.strokeRect(slotX, slotY, BLOCK_SIZE, BLOCK_SIZE);
+
+                        // 新增：繪製合成格中的物品
+                        const item = craftingGrid[i];
+                        if (item && item.type) {
+                            const img = blockImages[item.type] || missingTextureImage;
+                            if (img) {
+                                drawBlock(item.type, slotX, slotY, BLOCK_SIZE, BLOCK_SIZE);
+                                if (item.count > 1) {
+                                    ctx.font = 'bold 20px MinecraftFont, sans-serif';
+                                    ctx.textAlign = 'right';
+                                    ctx.textBaseline = 'bottom';
+                                    ctx.strokeStyle = '#000';
+                                    ctx.lineWidth = 1;
+                                    ctx.strokeText(item.count, slotX + BLOCK_SIZE - 2, slotY + BLOCK_SIZE - 2);
+                                    ctx.fillStyle = '#fff';
+                                    ctx.fillText(item.count, slotX + BLOCK_SIZE - 2, slotY + BLOCK_SIZE - 2);
+                                }
+                            }
+                        }
+                    }
+
+                    const arrowX = craftingGridStartX + craftingGridCols * slotSize + 18;
+                    const arrowY = craftingGridStartY + (craftingHeight / 2);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = '20px MinecraftFont, sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText('>', arrowX, arrowY);
+
+                    const outputX = arrowX + 20;
+                    const outputY = craftingGridStartY + (craftingHeight / 2) - (BLOCK_SIZE / 2);
+                    const isHoveredOutput = (HOTBAR_SIZE + INVENTORY_SIZE + CRAFTING_SIZE) === hoveredSlot;
+                    
+                    ctx.fillStyle = 'rgba(67, 67, 67, 0.8)';
+                    ctx.strokeStyle = isHoveredOutput ? '#ffffff' : 'rgba(255, 255, 255, 0.5)';
+                    ctx.lineWidth = isHoveredOutput ? 3 : 2;
+                    ctx.fillRect(outputX, outputY, BLOCK_SIZE, BLOCK_SIZE);
+                    ctx.strokeRect(outputX, outputY, BLOCK_SIZE, BLOCK_SIZE);
+
+                    // 繪製合成結果格中的物品
+                    // 檢查 craftingOutput 是否有值，並繪製物品
+                    if (craftingOutput !== null) {
+                        const img = blockImages[craftingOutput.type] || missingTextureImage;
+                        if (img) {
+                            drawBlock(craftingOutput.type, outputX, outputY, BLOCK_SIZE, BLOCK_SIZE);
+                            ctx.font = 'bold 20px MinecraftFont, sans-serif';
+                            ctx.textAlign = 'right';
+                            ctx.textBaseline = 'bottom';
+                            ctx.strokeStyle = '#000';
+                            ctx.lineWidth = 1;
+                            ctx.strokeText(craftingOutput.count, outputX + BLOCK_SIZE - 2, outputY + BLOCK_SIZE - 2);
+                            ctx.fillStyle = '#fff';
+                            ctx.fillText(craftingOutput.count, outputX + BLOCK_SIZE - 2, outputY + BLOCK_SIZE - 2);
+                        }
+                    }
+
+                    currentY += craftingHeight + 20;
+
+                    ctx.font = 'bold 22px MinecraftFont, sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'top';
+                    ctx.strokeStyle = '#000';
+                    ctx.lineWidth = 2;
+                    ctx.strokeText("Inventory", inventoryStartX + 60 + 1, currentY + 1);
+                    ctx.fillStyle = '#fff';
+                    ctx.fillText("Inventory", inventoryStartX + 60, currentY);
+                    
+                    currentY += titleHeight + 5;
+
+                    for (let i = 0; i < INVENTORY_SIZE; i++) {
+                        const row = Math.floor(i / INVENTORY_COLS);
+                        const col = i % INVENTORY_COLS;
+                        const slotX = inventoryStartX + col * slotSize;
+                        const slotY = currentY + row * slotSize;
+                        const item = mainInventory[i];
+                        const isHovered = (i + HOTBAR_SIZE) === hoveredSlot;
+                        
+                        ctx.fillStyle = 'rgba(67, 67, 67, 0.8)';
+                        ctx.strokeStyle = isHovered ? '#ffffff' : 'rgba(255, 255, 255, 0.5)';
+                        ctx.lineWidth = isHovered ? 3 : 2;
+                        ctx.fillRect(slotX, slotY, BLOCK_SIZE, BLOCK_SIZE);
+                        ctx.strokeRect(slotX, slotY, BLOCK_SIZE, BLOCK_SIZE);
+
+                        if (item && item.type) {
+                            const img = blockImages[item.type] || missingTextureImage;
+                            if (img) {
+                                drawBlock(item.type, slotX, slotY, BLOCK_SIZE, BLOCK_SIZE);
+                                if (item.count > 1) {
+                                    ctx.font = 'bold 20px MinecraftFont, sans-serif';
+                                    ctx.textAlign = 'right';
+                                    ctx.textBaseline = 'bottom';
+                                    ctx.strokeStyle = '#000';
+                                    ctx.lineWidth = 1;
+                                    ctx.strokeText(item.count, slotX + BLOCK_SIZE - 2, slotY + BLOCK_SIZE - 2);
+                                    ctx.fillStyle = '#fff';
+                                    ctx.fillText(item.count, slotX + BLOCK_SIZE - 2, slotY + BLOCK_SIZE - 2);
+                                }
+                            }
+                        }
+                    }
+                    
+                    currentY += INVENTORY_ROWS * slotSize + 5;
+
+                    for (let i = 0; i < HOTBAR_SIZE; i++) {
+                        const slotX = inventoryStartX + i * slotSize;
+                        const slotY = currentY;
+                        const item = hotbar[i];
+                        const isHovered = i === hoveredSlot;
+                        
+                        ctx.fillStyle = 'rgba(67, 67, 67, 0.8)';
+                        ctx.strokeStyle = isHovered ? '#ffffff' : 'rgba(255, 255, 255, 0.5)';
+                        ctx.lineWidth = isHovered ? 3 : 2;
+                        ctx.fillRect(slotX, slotY, BLOCK_SIZE, BLOCK_SIZE);
+                        ctx.strokeRect(slotX, slotY, BLOCK_SIZE, BLOCK_SIZE);
+
+                        if (item && item.type) {
+                            const img = blockImages[item.type] || missingTextureImage;
+                            if (img) {
+                                drawBlock(item.type, slotX, slotY, BLOCK_SIZE, BLOCK_SIZE);
+                                if (item.count > 1) {
+                                    ctx.font = 'bold 20px MinecraftFont, sans-serif';
+                                    ctx.textAlign = 'right';
+                                    ctx.textBaseline = 'bottom';
+                                    ctx.strokeStyle = '#000';
+                                    ctx.lineWidth = 1;
+                                    ctx.strokeText(item.count, slotX + BLOCK_SIZE - 2, slotY + BLOCK_SIZE - 2);
+                                    ctx.fillStyle = '#fff';
+                                    ctx.fillText(item.count, slotX + BLOCK_SIZE - 2, slotY + BLOCK_SIZE - 2);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            function handleInventoryClick(event) {
+                const slotSize = BLOCK_SIZE + 4;
+                let inventoryX, inventoryY;
+                let inventoryRows, inventorySize;
+                let inventoryList;
+
+                // 判斷是否在熱鍵欄範圍內
+                const hotbarWidth = HOTBAR_SIZE * slotSize;
+                const hotbarStartX = (canvas.width - hotbarWidth) / 2;
+                const hotbarStartY = canvas.height - slotSize - 20;
+
+                if (event.canvasY >= hotbarStartY && event.canvasY < hotbarStartY + slotSize) {
+                    if (event.canvasX >= hotbarStartX && event.canvasX < hotbarStartX + hotbarWidth) {
+                        const index = Math.floor((event.canvasX - hotbarStartX) / slotSize);
+                        handleSlotClick(hotbar, index);
+                        return;
+                    }
+                }
+
+                // 如果背包開啟，判斷是否在背包介面範圍內
+                if (isInventoryOpen) {
+                    const fullUIHeight = (INVENTORY_ROWS + 1) * slotSize;
+                    const inventoryStartX = (canvas.width - hotbarWidth) / 2;
+                    const inventoryStartY = (canvas.height - fullUIHeight) / 2;
+                    const inventoryHeight = INVENTORY_ROWS * slotSize;
+
+                    // 檢查是否點擊背包主區域
+                    if (event.canvasX >= inventoryStartX && event.canvasX < inventoryStartX + hotbarWidth &&
+                        event.canvasY >= inventoryStartY && event.canvasY < inventoryStartY + inventoryHeight) {
+                        
+                        const row = Math.floor((event.canvasY - inventoryStartY) / slotSize);
+                        const col = Math.floor((event.canvasX - inventoryStartX) / slotSize);
+                        const index = row * INVENTORY_COLS + col;
+                        
+                        if (index < INVENTORY_SIZE) {
+                            handleSlotClick(mainInventory, index);
+                            return;
+                        }
+                    }
+
+                    // 檢查是否點擊背包介面中的熱鍵欄區域
+                    const hotbarInInventoryY = inventoryStartY + INVENTORY_ROWS * slotSize;
+                    if (event.canvasX >= inventoryStartX && event.canvasX < inventoryStartX + hotbarWidth &&
+                        event.canvasY >= hotbarInInventoryY && event.canvasY < hotbarInInventoryY + slotSize) {
+
+                        const index = Math.floor((event.canvasX - inventoryStartX) / slotSize);
+                        handleSlotClick(hotbar, index);
+                        return;
+                    }
+                }
+            }
+
+            function getSlotInfoFromMouse(x, y) {
+                const slotSize = BLOCK_SIZE + 4;
+                const hotbarWidth = HOTBAR_SIZE * slotSize;
+                const inventoryWidth = INVENTORY_COLS * slotSize;
+                
+                // 這些變數與 drawInventory 保持一致
+                const craftingGridCols = isCraftingTableOpen ? 3 : 2;
+                const craftingGridRows = isCraftingTableOpen ? 3 : 2;
+                const craftingHeight = craftingGridRows * slotSize;
+                const titleHeight = 25;
+                
+                // 這兩行的計算方式與 drawInventory 完全同步，以確保座標一致
+                const fullUIWidth = Math.max(hotbarWidth, craftingGridCols * slotSize);
+                const fullUIHeight = craftingHeight + titleHeight + INVENTORY_ROWS * slotSize + 5 + slotSize;
+
+                const inventoryStartX = (canvas.width - fullUIWidth) / 2;
+                const inventoryStartY = (canvas.height - fullUIHeight) / 2;
+                let currentY = inventoryStartY;
+
+                // 檢查是否在合成格區域
+                // 這裡的計算方式與 drawInventory 完全同步，以確保座標一致
+                const craftingGridStartX = inventoryStartX + (fullUIWidth - craftingGridCols * slotSize - slotSize - 20) / 2;
+                const craftingGridStartY = currentY + 10;
+                
+                if (x >= craftingGridStartX && x < craftingGridStartX + craftingGridCols * slotSize &&
+                    y >= craftingGridStartY && y < craftingGridStartY + craftingGridRows * slotSize) {
+                    const row = Math.floor((y - craftingGridStartY) / slotSize);
+                    const col = Math.floor((x - craftingGridStartX) / slotSize);
+                    const index = row * craftingGridCols + col;
+                    return { list: craftingGrid, index: index, type: 'crafting' };
+                }
+                
+                // 檢查是否在合成結果格區域
+                const outputX = craftingGridStartX + craftingGridCols * slotSize + 40;
+                const outputY = craftingGridStartY + (craftingHeight / 2) - (BLOCK_SIZE / 2);
+                if (x >= outputX && x < outputX + slotSize && y >= outputY && y < outputY + slotSize) {
+                    return { list: [craftingOutput], index: 0, type: 'crafting_output' };
+                }
+
+                // 檢查是否在背包主區域
+                const mainInventoryStartY = currentY + craftingHeight + 20 + titleHeight + 5;
+                if (x >= inventoryStartX && x < inventoryStartX + inventoryWidth &&
+                    y >= mainInventoryStartY && y < mainInventoryStartY + INVENTORY_ROWS * slotSize) {
+                    
+                    const row = Math.floor((y - mainInventoryStartY) / slotSize);
+                    const col = Math.floor((x - inventoryStartX) / slotSize);
+                    const index = row * INVENTORY_COLS + col;
+                    
+                    if (index < INVENTORY_SIZE) {
+                        return { list: mainInventory, index: index, type: 'main' };
+                    }
+                }
+
+                // 檢查是否在背包內的熱鍵欄區域
+                const hotbarInInventoryY = mainInventoryStartY + INVENTORY_ROWS * slotSize + 5;
+                if (x >= inventoryStartX && x < inventoryStartX + hotbarWidth &&
+                    y >= hotbarInInventoryY && y < hotbarInInventoryY + slotSize) {
+                    const index = Math.floor((x - inventoryStartX) / slotSize);
+                    return { list: hotbar, index: index, type: 'hotbar' };
+                }
+                
+                return null;
+            }
+
+            function handleSlotClick(slotInfo, event) {
+                const inventoryList = slotInfo.list;
+                const index = slotInfo.index;
+
+                // 左鍵點擊：處理所有格子的拖放邏輯
+                if (event.button === 0) {
+                    switch (slotInfo.type) {
+                        case 'main':
+                        case 'hotbar':
+                            // 左鍵：背包或熱鍵欄的拖放邏輯
+                            const targetSlot = inventoryList[index];
+                            if (mouseHeldItem) {
+                                if (targetSlot && targetSlot.type === mouseHeldItem.type) {
+                                    // 堆疊物品
+                                    const space = ITEM_STACK_SIZE - targetSlot.count;
+                                    const transfer = Math.min(space, mouseHeldItem.count);
+                                    targetSlot.count += transfer;
+                                    mouseHeldItem.count -= transfer;
+                                    if (mouseHeldItem.count === 0) {
+                                        mouseHeldItem = null;
+                                    }
+                                } else {
+                                    // 交換物品
+                                    inventoryList[index] = mouseHeldItem;
+                                    mouseHeldItem = targetSlot;
+                                }
+                            } else {
+                                // 拿起物品
+                                mouseHeldItem = targetSlot;
+                                if (mouseHeldItem) {
+                                    inventoryList[index] = null;
+                                }
+                            }
+                            break;
+
+                        case 'crafting':
+                            // 左鍵：合成格的拖放邏輯
+                            const craftingTarget = inventoryList[index];
+                            if (mouseHeldItem) {
+                                if (craftingTarget && craftingTarget.type === mouseHeldItem.type) {
+                                    // 新增：如果物品相同，進行堆疊
+                                    const space = ITEM_STACK_SIZE - craftingTarget.count;
+                                    const transfer = Math.min(space, mouseHeldItem.count);
+                                    craftingTarget.count += transfer;
+                                    mouseHeldItem.count -= transfer;
+                                    if (mouseHeldItem.count === 0) {
+                                        mouseHeldItem = null;
+                                    }
+                                } else {
+                                    // 交換物品
+                                    const originalMouseHeldItem = mouseHeldItem;
+                                    mouseHeldItem = craftingTarget;
+                                    inventoryList[index] = originalMouseHeldItem;
+                                }
+                            } else {
+                                // 拿起物品
+                                mouseHeldItem = craftingTarget;
+                                if (mouseHeldItem) {
+                                    inventoryList[index] = null;
+                                }
+                            }
+                            craftingOutput = checkCrafting();
+                            break;
+                        
+                        case 'crafting_output':
+                            if (event.button === 0 && craftingOutput) { // 左鍵點擊且有合成結果
+                                const outputItem = craftingOutput;
+                                if (!mouseHeldItem) {
+                                    const hasSpace = mainInventory.some(slot => !slot) || mainInventory.some(slot => slot && slot.type === outputItem.type && slot.count < 64);
+                                    if (hasSpace) {
+                                        mouseHeldItem = { ...outputItem };
+                                        const craftingGridSize = isCraftingTableOpen ? 9 : 4;
+                                        for (let i = 0; i < craftingGridSize; i++) {
+                                            if (craftingGrid[i]) {
+                                                craftingGrid[i].count--;
+                                                if (craftingGrid[i].count === 0) {
+                                                    craftingGrid[i] = null;
+                                                }
+                                            }
+                                        }
+                                        craftingOutput = null;
+                                        checkCrafting();
+                                    }
+                                } else if (mouseHeldItem.type === outputItem.type && mouseHeldItem.count < 64) {
+                                    const hasSpace = mainInventory.some(slot => !slot) || mainInventory.some(slot => slot && slot.type === outputItem.type && slot.count < 64);
+                                    if (hasSpace) {
+                                        mouseHeldItem.count += outputItem.count;
+                                        const craftingGridSize = isCraftingTableOpen ? 9 : 4;
+                                        for (let i = 0; i < craftingGridSize; i++) {
+                                            if (craftingGrid[i]) {
+                                                craftingGrid[i].count--;
+                                                if (craftingGrid[i].count === 0) {
+                                                    craftingGrid[i] = null;
+                                                }
+                                            }
+                                        }
+                                        craftingOutput = null;
+                                        checkCrafting();
+                                    }
+                                }
+                            }
+                            break;
+                    }
+                } 
+                // 右鍵點擊：處理所有格子的邏輯
+                else if (event.button === 2) {
+                    switch (slotInfo.type) {
+                        case 'main':
+                        case 'hotbar':
+                            // 右鍵：背包或熱鍵欄的邏輯
+                            const targetSlot = inventoryList[index];
+                            if (!mouseHeldItem) {
+                                if (targetSlot && targetSlot.count > 1) {
+                                    const halfCount = Math.floor(targetSlot.count / 2);
+                                    mouseHeldItem = { type: targetSlot.type, count: halfCount };
+                                    targetSlot.count -= halfCount;
+                                }
+                            } else {
+                                if (!targetSlot) {
+                                    inventoryList[index] = { type: mouseHeldItem.type, count: 1 };
+                                    mouseHeldItem.count--;
+                                    if (mouseHeldItem.count === 0) {
+                                        mouseHeldItem = null;
+                                    }
+                                } else if (targetSlot.type === mouseHeldItem.type && targetSlot.count < ITEM_STACK_SIZE) {
+                                    targetSlot.count++;
+                                    mouseHeldItem.count--;
+                                    if (mouseHeldItem.count === 0) {
+                                        mouseHeldItem = null;
+                                    }
+                                }
+                            }
+                            break;
+                            
+                        case 'crafting':
+                            // 右鍵：合成格的邏輯
+                            const craftingTarget = inventoryList[index];
+                            if (!mouseHeldItem) {
+                                if (craftingTarget && craftingTarget.count > 1) {
+                                    const halfCount = Math.floor(craftingTarget.count / 2);
+                                    mouseHeldItem = { type: craftingTarget.type, count: halfCount };
+                                    craftingTarget.count -= halfCount;
+                                }
+                            } else {
+                                if (!craftingTarget) {
+                                    inventoryList[index] = { type: mouseHeldItem.type, count: 1 };
+                                    mouseHeldItem.count--;
+                                    if (mouseHeldItem.count === 0) {
+                                        mouseHeldItem = null;
+                                    }
+                                } else if (craftingTarget.type === mouseHeldItem.type && craftingTarget.count < ITEM_STACK_SIZE) {
+                                    craftingTarget.count++;
+                                    mouseHeldItem.count--;
+                                    if (mouseHeldItem.count === 0) {
+                                        mouseHeldItem = null;
+                                    }
+                                }
+                            }
+                            checkCrafting();
+                            break;
+                    }
+                }
+            }
+
+            function triggerItemNameDisplay(itemType) {
+                const newItemIndex = hotbar.findIndex(slot => slot && slot.type === itemType);
+                if (newItemIndex !== -1) {
+                    selectedSlot = newItemIndex;
+                    itemDisplayNameAlpha = 1;
+                    itemDisplayNameTimer = ITEM_DISPLAY_SHOW_DURATION + ITEM_DISPLAY_FADE_DURATION;
+                }
+            }
+
+            function getBlockFromMouseCoords() {
+                const rect = canvas.getBoundingClientRect();
+                const worldX = Math.floor(camera.x + (mouse.x - rect.left) / rect.width * canvas.width / BLOCK_SIZE);
+                const worldY = Math.floor(camera.y + (canvas.height - (mouse.y - rect.top) / rect.height * canvas.height) / BLOCK_SIZE);
+                return { x: worldX, y: worldY };
+            }
+            
+            function getBlockType(worldX, worldY) {
+                const arrayX = Math.floor(worldX);
+                const arrayY = Math.floor(worldY - BEDROCK_LAYER_Y);
+                if (arrayX < 0 || arrayX >= WORLD_WIDTH || arrayY < 0 || arrayY >= WORLD_HEIGHT) {
+                    return 'air';
+                }
+                return gameWorld[arrayY][arrayX];
+            }
+
+            function getSlotIndexFromMouse(mouseCanvasX, mouseCanvasY) {
+                let slotSize = BLOCK_SIZE + 4;
+                let hotbarStartY, inventoryStartY, craftingStartY;
+
+                if (isInventoryOpen) {
+                    const totalInventoryHeight = (CRAFTING_ROWS + 1) * slotSize + INVENTORY_ROWS * slotSize + slotSize * 2;
+                    craftingStartY = (canvas.height - totalInventoryHeight) / 2;
+                    inventoryStartY = craftingStartY + (CRAFTING_ROWS + 1) * slotSize + 20;
+                    hotbarStartY = inventoryStartY + INVENTORY_ROWS * slotSize + 20;
+                } else {
+                    hotbarStartY = canvas.height - slotSize - 20;
+                    inventoryStartY = hotbarStartY - slotSize * INVENTORY_ROWS;
+                    craftingStartY = inventoryStartY - slotSize * (CRAFTING_ROWS + 1) + 10;
+                }
+
+                const hotbarWidth = HOTBAR_SIZE * slotSize;
+                const hotbarStartX = (canvas.width - hotbarWidth) / 2;
+                
+                const inHotbar = mouseCanvasX >= hotbarStartX && mouseCanvasX < hotbarStartX + hotbarWidth &&
+                                 mouseCanvasY >= hotbarStartY && mouseCanvasY < hotbarStartY + BLOCK_SIZE;
+                if (inHotbar) {
+                    return Math.floor((mouseCanvasX - hotbarStartX) / slotSize);
+                }
+
+                if (isInventoryOpen) {
+                    const inventoryWidth = INVENTORY_COLS * slotSize;
+                    const inventoryStartX = (canvas.width - inventoryWidth) / 2;
+                    const inMainInventory = mouseCanvasX >= inventoryStartX && mouseCanvasX < inventoryStartX + inventoryWidth &&
+                                            mouseCanvasY >= inventoryStartY && mouseCanvasY < inventoryStartY + slotSize * INVENTORY_ROWS;
+                    if (inMainInventory) {
+                        const row = Math.floor((mouseCanvasY - inventoryStartY) / slotSize);
+                        const col = Math.floor((mouseCanvasX - inventoryStartX) / slotSize);
+                        return row * INVENTORY_COLS + col + HOTBAR_SIZE;
+                    }
+
+                    const craftingWidth = CRAFTING_COLS * slotSize + slotSize + BLOCK_SIZE + 4;
+                    const craftingStartX = (canvas.width - craftingWidth) / 2;
+                    
+                    const inCraftingGrid = mouseCanvasX >= craftingStartX && mouseCanvasX < craftingStartX + CRAFTING_COLS * slotSize &&
+                                           mouseCanvasY >= craftingStartY && mouseCanvasY < craftingStartY + CRAFTING_ROWS * slotSize;
+                    if (inCraftingGrid) {
+                        const row = Math.floor((mouseCanvasY - craftingStartY) / slotSize);
+                        const col = Math.floor((mouseCanvasX - craftingStartX) / slotSize);
+                        return row * CRAFTING_COLS + col + HOTBAR_SIZE + INVENTORY_SIZE;
+                    }
+                    
+                    const outputX = craftingStartX + (CRAFTING_COLS) * slotSize + slotSize;
+                    const outputY = craftingStartY + (CRAFTING_ROWS / 2 - 0.5) * slotSize;
+                    const inCraftingOutput = mouseCanvasX >= outputX && mouseCanvasX < outputX + BLOCK_SIZE &&
+                                             mouseCanvasY >= outputY && mouseCanvasY < outputY + BLOCK_SIZE;
+                    if (inCraftingOutput) {
+                        return HOTBAR_SIZE + INVENTORY_SIZE + CRAFTING_SIZE;
+                    }
+                }
+                return null;
+            }
+
+            function handleMouseClick(event) {
+                const rect = canvas.getBoundingClientRect();
+                const mouseCanvasX = (event.clientX - rect.left) / rect.width * canvas.width;
+                const mouseCanvasY = (event.clientY - rect.top) / rect.height * canvas.height;
+                const slotIndex = getSlotIndexFromMouse(mouseCanvasX, mouseCanvasY);
+                
+                if (event.button === 0) {
+                    if (isInventoryOpen && slotIndex !== null) {
+                        if (slotIndex === HOTBAR_SIZE + INVENTORY_SIZE + CRAFTING_SIZE) {
+                            if (craftingOutput) {
+                                // Try to add to inventory first
+                                if (addToInventory(craftingOutput.type, craftingOutput.count)) {
+                                    for (let i = 0; i < craftingGrid.length; i++) {
+                                        if (craftingGrid[i]) {
+                                            craftingGrid[i].count--;
+                                            if (craftingGrid[i].count <= 0) {
+                                                craftingGrid[i] = null;
+                                            }
+                                        }
+                                    }
+                                    checkCrafting();
+                                } else {
+                                    // If inventory is full, drop the item
+                                    droppedItems.push({
+                                        x: player.x,
+                                        y: player.y + PLAYER_HEIGHT - 0.5,
+                                        type: craftingOutput.type,
+                                        yVelocity: 3,
+                                        onGround: false,
+                                        canBePickedUp: false,
+                                        invincibilityTime: ITEM_PICKUP_INVINCIBILITY_TIME
+                                    });
+                                    // Also consume the crafting materials
+                                    for (let i = 0; i < craftingGrid.length; i++) {
+                                        if (craftingGrid[i]) {
+                                            craftingGrid[i].count--;
+                                            if (craftingGrid[i].count <= 0) {
+                                                craftingGrid[i] = null;
+                                            }
+                                        }
+                                    }
+                                    checkCrafting();
+                                }
+                            }
+                        } else {
+                            const slotInfo = getSlotInfo(slotIndex);
+                            const slot = slotInfo.list[slotInfo.index];
+                            
+                            if (mouseHeldItem) {
+                                if (slot && slot.type === mouseHeldItem.type && slot.count < ITEM_STACK_SIZE) {
+                                    const transferAmount = Math.min(mouseHeldItem.count, ITEM_STACK_SIZE - slot.count);
+                                    slot.count += transferAmount;
+                                    mouseHeldItem.count -= transferAmount;
+                                    if (mouseHeldItem.count <= 0) {
+                                        mouseHeldItem = null;
+                                    }
+                                } else if (!slot) {
+                                    slotInfo.list[slotInfo.index] = mouseHeldItem;
+                                    mouseHeldItem = null;
+                                } else {
+                                    const temp = mouseHeldItem;
+                                    mouseHeldItem = slot;
+                                    slotInfo.list[slotInfo.index] = temp;
+                                }
+                            } else if (slot) {
+                                mouseHeldItem = slot;
+                                slotInfo.list[slotInfo.index] = null;
+                            }
+                            checkCrafting();
+                        }
+                    }
+                } else if (event.button === 2) {
+                    if (isInventoryOpen && slotIndex !== null) {
+                        if (slotIndex === HOTBAR_SIZE + INVENTORY_SIZE + CRAFTING_SIZE) {
+                            // Do nothing on right-click output
+                        } else {
+                            const slotInfo = getSlotInfo(slotIndex);
+                            const slot = slotInfo.list[slotInfo.index];
+
+                            if (mouseHeldItem) {
+                                if (slot && slot.type === mouseHeldItem.type && slot.count < ITEM_STACK_SIZE) {
+                                    slot.count++;
+                                    mouseHeldItem.count--;
+                                    if (mouseHeldItem.count <= 0) {
+                                        mouseHeldItem = null;
+                                    }
+                                } else if (!slot) {
+                                    slotInfo.list[slotInfo.index] = { type: mouseHeldItem.type, count: 1 };
+                                    mouseHeldItem.count--;
+                                    if (mouseHeldItem.count <= 0) {
+                                        mouseHeldItem = null;
+                                    }
+                                } else {
+                                    const temp = mouseHeldItem;
+                                    mouseHeldItem = slot;
+                                    slotInfo.list[slotInfo.index] = temp;
+                                }
+                            } else if (slot) {
+                                if (slot.count > 1) {
+                                    mouseHeldItem = { ...slot };
+                                    mouseHeldItem.count = Math.ceil(slot.count / 2);
+                                    slot.count = Math.floor(slot.count / 2);
+                                } else {
+                                    mouseHeldItem = slot;
+                                    slotInfo.list[slotInfo.index] = null;
+                                }
+                            }
+                            checkCrafting();
+                        }
+                    }
+                }
+            }
+
+            function handleMouseDown(event) {
+                startBGM();
+
+                event.preventDefault();
+                
+                // 更新滑鼠在畫布上的座標
+                const rect = canvas.getBoundingClientRect();
+                mouse.canvasX = (event.clientX - rect.left) / (rect.width / canvas.width);
+                mouse.canvasY = (event.clientY - rect.top) / (rect.height / canvas.height);
+
+                // 如果背包開啟，只處理背包內的點擊
+                if (isInventoryOpen) {
+                    const slotInfo = getSlotInfoFromMouse(mouse.canvasX, mouse.canvasY);
+                    if (slotInfo !== null) {
+                        // 傳遞 slotInfo 物件和 event 物件
+                        handleSlotClick(slotInfo, event);
+                    }
+                    return; // 點擊處理完畢，直接結束函式
+                }
+
+                // 如果背包關閉，則執行遊戲世界的邏輯
+                if (event.button === 0) { // 左鍵：挖掘
+                    const { x: worldX, y: worldY } = getBlockFromMouseCoords();
+                    const blockType = getBlockType(worldX, worldY);
+
+                    const isTargetBlock = ITEM_DATA[blockType]?.isBlock;
+                    const isBedrock = blockType === 'bedrock';
+
+                    // 檢查玩家是否可以挖掘目標方塊
+                    if (isTargetBlock && !isBedrock) {
+                        player.digging.isDigging = true;
+                        player.digging.targetBlock = { x: worldX, y: worldY };
+                        player.digging.progress = 0; // 每次點擊都重置進度
+                    } else {
+                        player.digging.isDigging = false; // 如果不能挖掘，就停止
+                    }
+                } else if (event.button === 2) { // 右鍵：放置方塊或與工作台互動
+                    const { x: worldX, y: worldY } = getBlockFromMouseCoords();
+                    const blockType = getBlockType(worldX, worldY);
+                    const selectedItem = hotbar[selectedSlot];
+                    const placedBlock = selectedItem ? ITEM_DATA[selectedItem.type] : null;
+                    
+                    if (blockType === 'crafting_table') {
+                        // 如果點擊工作台，打開背包
+                        isInventoryOpen = true;
+                        isCraftingTableOpen = true;
+                        return; // 結束函式
+                    }
+
+                    if (blockType === 'air' && selectedItem && selectedItem.count > 0 && placedBlock.isPlaceable) {
+                        const arrayY = worldY - BEDROCK_LAYER_Y;
+                        const arrayX = worldX;
+
+                        if (arrayX < 0 || arrayX >= WORLD_WIDTH || arrayY < 0 || arrayY >= WORLD_HEIGHT) {
+                            return;
+                        }
+
+                        if (
+                            (worldX === Math.floor(player.x) && worldY === Math.floor(player.y)) ||
+                            (worldX === Math.floor(player.x) && worldY === Math.floor(player.y + PLAYER_HEIGHT - 0.01)) ||
+                            (worldX === Math.floor(player.x + 0.99) && worldY === Math.floor(player.y)) ||
+                            (worldX === Math.floor(player.x + 0.99) && worldY === Math.floor(player.y + PLAYER_HEIGHT - 0.01))
+                        ) {
+                            return;
+                        }
+                        
+                        gameWorld[arrayY][arrayX] = selectedItem.type;
+                        selectedItem.count--;
+                        if (selectedItem.count <= 0) {
+                            hotbar[selectedSlot] = null;
+                        }
+                        
+                        const blockAboveY = worldY + 1;
+                        const blockAboveArrayY = blockAboveY - BEDROCK_LAYER_Y; 
+                        
+                        if (blockAboveArrayY >= 0 && blockAboveArrayY < WORLD_HEIGHT && gameWorld[blockAboveArrayY][arrayX] === 'grass_block_block') {
+                            gameWorld[blockAboveArrayY][arrayX] = 'dirt';
+                        }
+                    }
+                }
+                drawMap();
+            }
+
+            function handleMouseUp() {
+                if (!isInventoryOpen) {
+                    player.digging.isDigging = false;
+                    player.digging.progress = 0;
+                }
+            }
+            
+            function handleMouseLeave() {
+                player.digging.isDigging = false;
+                player.digging.progress = 0;
+                hoveredBlock = null; 
+            }
+            
+            canvas.addEventListener('mousemove', (event) => {
+                const rect = canvas.getBoundingClientRect();
+                const mouseCanvasX = (event.clientX - rect.left) / rect.width * canvas.width;
+                const mouseCanvasY = (event.clientY - rect.top) / rect.height * canvas.height;
+                
+                mouse.x = event.clientX;
+                mouse.y = event.y; 
+                mouse.canvasX = mouseCanvasX;
+                mouse.canvasY = mouseCanvasY;
+
+                if (isInventoryOpen) {
+                    const slotInfo = getSlotInfoFromMouse(mouseCanvasX, mouseCanvasY);
+                    if (slotInfo !== null) {
+                        let item = null;
+                        if (slotInfo.type === 'main') {
+                            hoveredSlot = slotInfo.index + HOTBAR_SIZE;
+                            item = mainInventory[slotInfo.index];
+                        } else if (slotInfo.type === 'hotbar') {
+                            hoveredSlot = slotInfo.index;
+                            item = hotbar[slotInfo.index];
+                        } else if (slotInfo.type === 'crafting') {
+                            hoveredSlot = slotInfo.index + HOTBAR_SIZE + INVENTORY_SIZE;
+                            item = craftingGrid[slotInfo.index];
+                        } else if (slotInfo.type === 'crafting_output') {
+                            hoveredSlot = HOTBAR_SIZE + INVENTORY_SIZE + CRAFTING_SIZE;
+                            item = craftingOutput;
+                        }
+
+                        if (item) {
+                            showItemTooltip(item.type);
+                        } else {
+                            // 如果沒有物品，則隱藏 Tooltip
+                            itemDisplayNameTimer = 0;
+                            itemDisplayNameAlpha = 0;
+                        }
+                    } else {
+                        hoveredSlot = null;
+                    }
+                } else {
+                    const slotSize = BLOCK_SIZE + 4;
+                    const hotbarWidth = HOTBAR_SIZE * slotSize;
+                    const hotbarStartX = (canvas.width - hotbarWidth) / 2;
+                    const hotbarStartY = canvas.height - slotSize - 20;
+
+                    hoveredSlot = getSlotIndexFromMouse(mouseCanvasX, mouseCanvasY);
+                    if (hoveredSlot === null) {
+                        const { x: worldX, y: worldY } = getBlockFromMouseCoords();
+                        const blockType = getBlockType(worldX, worldY);
+                        
+                        if (ITEM_DATA[blockType] && ITEM_DATA[blockType].isBlock) {
+                            hoveredBlock = { x: worldX, y: worldY };
+                        } else {
+                            hoveredBlock = null;
+                        }
+
+                        if (mouseCanvasX >= hotbarStartX && mouseCanvasX < hotbarStartX + hotbarWidth &&
+                            mouseCanvasY >= hotbarStartY && mouseCanvasY < hotbarStartY + slotSize) {
+                            hoveredSlot = Math.floor((mouseCanvasX - hotbarStartX) / slotSize);
+                        } else {
+                            hoveredSlot = null;
+                        }
+                    } else {
+                        hoveredBlock = null;
+                    }
+                }
+                
+                if (player.digging.isDigging) {
+                    const { x: currentMouseBlockX, y: currentMouseBlockY } = getBlockFromMouseCoords();
+                    if (currentMouseBlockX !== player.digging.targetBlock.x || currentMouseBlockY !== player.digging.targetBlock.y) {
+                        player.digging.isDigging = false;
+                        player.digging.progress = 0;
+                    }
+                }
+            });
+            
+            function updateCoordsDisplay() {
+                coordsDisplay.textContent = `X: ${player.x.toFixed(2)}, Y: ${player.y.toFixed(2)}`;
+            }
+
+            function isSolid(x, y) {
+                const floorX = Math.floor(x);
+                const floorY = Math.floor(y);
+                
+                const arrayX = floorX;
+                const arrayY = floorY - BEDROCK_LAYER_Y;
+                if (arrayX < 0 || arrayX >= WORLD_WIDTH || arrayY < 0 || arrayY >= WORLD_HEIGHT) {
+                    return true;
+                }
+                return ITEM_DATA[gameWorld[arrayY][arrayX]]?.isSolid;
+            }
+
+            function togglePauseMenu() {
+                isGamePaused = !isGamePaused; 
+                
+                if (isGamePaused) {
+                    pauseMenu.classList.remove('hidden');
+                    if (currentAudio) currentAudio.pause();
+                } else {
+                    pauseMenu.classList.add('hidden');
+                    lastTime = performance.now();
+                    requestAnimationFrame(gameLoop);
+                    if (currentAudio) currentAudio.play();
+                }
+            }
+
+            function toggleSettingsPage() {
+                const settingsScreen = document.getElementById('settings-screen');
+                if (settingsScreen) {
+                    settingsScreen.classList.toggle('hidden');
+
+                    togglePauseMenu();
+                    isGamePaused = !settingsScreen.classList.contains('hidden');
+                }
+            }
+
+            async function toggleChat(open = !isChatOpen) {
+                isChatOpen = open;
+                fullChatScreen.classList.toggle('hidden', !isChatOpen);
+                
+                if (isChatOpen) {
+                    // 開啟時，將焦點移到輸入框
+                    chatInput.focus();
+                    await sleep(10);
+                    chatInput.value = '';
+                    // [重要] 如果你的 ESC 暫停選單沒有處理，這裡需要設定 isGamePaused = true;
+                } else {
+                    // 關閉時，清除輸入框並將焦點移開
+                    chatInput.value = '';
+                    chatInput.blur();
+                    // [重要] 如果你的 ESC 暫停選單沒有處理，這裡需要設定 isGamePaused = false;
+                }
+            }
+
+            /**
+             * 向聊天歷史記錄中新增一條訊息。
+             * @param {string} message - 訊息內容。
+             * @param {string} type - 訊息類型 ('system', 'chat', 'command')
+             */
+            function addChatMessage(message, isSystemMessage = true, type = 'chat') {
+                if (message.startsWith('/') && !isSystemMessage) {
+                    executeCommand(message.substring(1, message.length));
+
+                    return;
+                }
+                else if (!isSystemMessage) message = "<Player> " + message;
+
+                const newMessage = document.createElement('p');
+                newMessage.innerText = message;
+                newMessage.className = type + '-message';
+                
+                chatHistory.appendChild(newMessage);
+                
+                // 保持捲動條在最底部
+                chatHistory.scrollTop = chatHistory.scrollHeight;
+            }
+
+            function executeCommand(cmd) {
+                const cmds = cmd.split(' ');
+                cmd = cmds[0];
+
+                if (cmd === 'help') {
+                    addChatMessage("===所有的指令===\n/kill - 殺死玩家\n" +
+                    "/damage - 對玩家造成傷害\n" +
+                    "/give - 給與玩家物品\n" +
+                    "/toast - 顯示Toast訊息\n" +
+                    "/tp - 傳送玩家至指定座標");
+                }
+                else if (cmd === 'kill') {
+                    handlePlayerDeath(DAMAGE_TYPE.GENERIC);
+                    addChatMessage("已移除 Player", true, 'success');
+                }
+                else if (cmd === 'damage') {
+                    if (cmds.length > 2) {
+                        takeDamage(cmds[1], DAMAGE_TYPE[cmds[2]]);
+                        addChatMessage("已將 " + cmds[1] + " 點 " + cmds[2] + " 傷害作用至 Player", true, 'success');
+                    }
+                    else if (cmds.length > 1) {
+                        takeDamage(cmds[1], DAMAGE_TYPE.GENERIC);
+                        addChatMessage("已將 " + cmds[1] + " 點傷害作用至 Player", true, 'success');
+                    }
+                    else addChatMessage("/damage 的語法:\n/damage <amount> [damage type]");
+                }
+                else if (cmd === 'give') {
+                    if (cmds.length > 2) {
+                        addToInventory(cmds[1], cmds[2]);
+                        addChatMessage("已給予 Player " + cmds[1] + " *" + cmds[2], true, 'success');
+                    }
+                    else if (cmds.length > 1) {
+                        addToInventory(cmds[1], 1);
+                        addChatMessage("已給予 Player " + cmds[1] + " *1", true, 'success');
+                    }
+                    else addChatMessage("/give 的語法:\n/give <item ID> [count]");
+                }
+                else if (cmd === 'toast') {
+                    if (cmds.length > 1) {
+                        showToast(cmds[1]);
+                    }
+                    else addChatMessage("/toast 的語法:\n/toast <message>");
+                }
+                else if (cmd === 'tp') {
+                    if (cmds.length > 2) {
+                        player.x = cmds[1];
+                        player.y = cmds[2];
+                    }
+                    else addChatMessage("/tp 的語法:\n/tp <x> <y>");
+                }
+                else {
+                    addChatMessage("錯誤或不存在的指令: " + cmd + " ，請確定該指令存在且權限設定正確。", true, "error");
+                }
+            }
+
+            resumeButton.addEventListener('click', () => {
+                if (isGamePaused) {
+                    togglePauseMenu();
+                }
+            });
+
+            let lastSelectedSlot = selectedSlot;
+            let lastPlayerPosition = { x: player.x, y: player.y };
+
+            async function handleKeyDown(event) {
+                const isFunctionKey = event.key.startsWith('F') && parseInt(event.key.substring(1)) >= 1 && parseInt(event.key.substring(1)) <= 11;
+    
+                if (isFunctionKey) {
+                    event.preventDefault();
+                }
+                if (event.ctrlKey) {
+                    // 將按鍵轉換成小寫，以便同時攔截 Ctrl+s 和 Ctrl+S
+                    const key = event.key.toLowerCase(); 
+                    
+                    // 要攔截的按鍵清單
+                    const keysToBlock = ['s', 'o', 'w', 'r']; 
+
+                    if (keysToBlock.includes(key)) {
+                        event.preventDefault();
+                    }
+                }
+
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+
+                    if (!isCraftingTableOpen && !isInventoryOpen && !isPlayerDead && !isChatOpen) {
+                        togglePauseMenu();
+                        return;
+                    }
+
+                    if (isCraftingTableOpen) {
+                        isCraftingTableOpen = false;
+                        isInventoryOpen = false;
+                    } else if (isInventoryOpen) {
+                        isInventoryOpen = false;
+                    }
+
+                    toggleChat(false);
+
+                    return;
+                }
+
+                const key = event.key.toLowerCase();
+                if (key === 't' || key === '/') {
+                    if (document.activeElement !== chatInput) {
+                        toggleChat();
+                        if (key === '/') {
+                            await sleep(10);
+                            chatInput.value = '/';
+                        }
+                        return;
+                    }
+                }
+                if (event.key === 'Enter' && isChatOpen) {
+                    if (chatInput.value !== '') addChatMessage(chatInput.value, false);
+                    chatInput.value = '';
+                }
+                
+                if (isPlayerDead || isGamePaused || isChatOpen) return;
+
+                if (key === 'e') {
+                    isInventoryOpen = !isInventoryOpen;
+                    isCraftingTableOpen = false;
+                }
+
+                if (key === 'q') {
+                    const item = hotbar[selectedSlot];
+                    if (item) {
+                        droppedItems.push({
+                            x: player.x,
+                            y: player.y + PLAYER_HEIGHT - 0.5,
+                            type: item.type,
+                            yVelocity: 3,
+                            onGround: false,
+                            canBePickedUp: false,
+                            invincibilityTime: ITEM_PICKUP_INVINCIBILITY_TIME
+                        });
+                        item.count--;
+                        if (item.count <= 0) {
+                            hotbar[selectedSlot] = null;
+                        }
+                    }
+                }
+
+                if (isInventoryOpen && ['a', 's', 'd', 'w', 'arrowleft', 'arrowright', ' '].includes(key)) {
+                    // Allow movement keys and jump even when inventory is open
+                } else if (isInventoryOpen) {
+                    keys = {};
+                    return;
+                }
+
+                keys[key] = true;
+                if ((event.key === ' ' || event.key === 'ArrowUp') && player.onGround) {
+                    player.yVelocity = JUMP_POWER;
+                    player.onGround = false;
+                }
+                
+                const numKey = parseInt(event.key);
+                if (!isNaN(numKey) && numKey >= 1 && numKey <= 9) {
+                    const slotIndex = parseInt(key) - 1;
+                    if (slotIndex >= 0 && slotIndex < HOTBAR_SIZE) {
+                        selectedSlot = slotIndex;
+                        // 新增: 檢查新選中的槽位是否有物品，並顯示Tooltip
+                        const selectedItem = hotbar[selectedSlot];
+                        if (selectedItem) {
+                            showItemTooltip(selectedItem.type);
+                        } else {
+                            // 如果新選中的槽位是空的，隱藏Tooltip
+                            itemDisplayNameAlpha = 0;
+                        }
+                    }
+                }
+            }
+            
+            function handleKeyUp(event) {
+                const key = event.key.toLowerCase();
+                keys[key] = false;
+            }
+
+            function applyGravity() {
+    
+                // 限制檢查頻率，避免每幀都遍歷世界
+                gravityCheckCounter++;
+                if (gravityCheckCounter < GRAVITY_CHECK_INTERVAL) {
+                    return;
+                }
+                gravityCheckCounter = 0; // 重置計數器
+
+                // 關鍵：從下往上遍歷世界 (從 WORLD_HEIGHT - 2 開始，避開世界最底部)
+                // 這樣可以確保上方的方塊在下方的方塊掉落後，能正確跟隨掉落。
+                for (let y = WORLD_HEIGHT - 2; y >= 0; y--) { 
+                    for (let x = 0; x < WORLD_WIDTH; x++) {
+                        
+                        // 1. 取得當前方塊的**名稱**
+                        const blockName = gameWorld[y][x];
+                        const blockType = ITEM_DATA[blockName];
+
+                        // 檢查方塊是否存在且具有重力屬性
+                        if (blockType && blockType.hasGravity) {
+                            // 2. 檢查下方方塊的屬性
+                            // 陣列索引 y + 1 是「下方」（靠近世界底部）
+                            if (y + 1 < WORLD_HEIGHT) {
+                                const blockBelowName = gameWorld[y - 1][x];
+                                const blockBelowType = ITEM_DATA[blockBelowName];
+                                
+                                // 檢查條件：
+                                // A) 下方方塊類型存在
+                                // B) 下方方塊是非固體 (!isSolid)，例如 'air' 或 'short_grass'
+                                if ((blockBelowType && !blockBelowType?.isBlock) || blockBelowName === 'air') {
+                                    
+                                    // 3. 執行掉落：將當前方塊向下移動一個陣列索引
+                                    
+                                    // a. 將下方 (y + 1) 設置為當前方塊的名稱
+                                    gameWorld[y - 1][x] = blockName; 
+                                    
+                                    // b. 將當前位置 (y) 設置為空氣的名稱
+                                    gameWorld[y][x] = 'air'; 
+                                    
+                                    // (可選) 播放方塊移動音效
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            function gameLoop(currentTime) {
+                if (isGamePaused) return;
+
+                if (lastTime === 0) {
+                    lastTime = currentTime;
+                    requestAnimationFrame(gameLoop);
+                    return;
+                }
+                
+                const deltaTime = (currentTime - lastTime) / 1000;
+                lastTime = currentTime;
+
+                if (deltaTime > 0.5) {
+                    requestAnimationFrame(gameLoop);
+                    return;
+                }
+
+                blockAnimationFrameCounter++;
+                if (blockAnimationFrameCounter >= BLOCK_ANIMATION_SPEED) {
+                    currentBlockFrame++; // <=== 確保這一行被執行
+                    blockAnimationFrameCounter = 0;
+                }
+
+                if (itemDisplayNameTimer > 0) {
+                    itemDisplayNameTimer -= deltaTime;
+                    if (itemDisplayNameTimer <= ITEM_DISPLAY_FADE_DURATION) {
+                         itemDisplayNameAlpha = Math.max(0, itemDisplayNameTimer / ITEM_DISPLAY_FADE_DURATION);
+                    } else {
+                        itemDisplayNameAlpha = 1;
+                    }
+                } else {
+                    itemDisplayNameAlpha = 0;
+                }
+
+                if (player.digging.isDigging) {
+                    const { x, y } = player.digging.targetBlock;
+                    const blockType = getBlockType(x, y);
+                    const blockData = ITEM_DATA[blockType];
+                    const heldItem = hotbar[selectedSlot];
+                    const heldItemData = heldItem ? ITEM_DATA[heldItem.type] : null;
+
+                    // 在這裡計算工具對挖掘時間的影響
+                    let breakTimeMultiplier = 1;
+
+                    // 檢查玩家手上的物品是不是工具，以及方塊是否需要工具來挖掘
+                    if (heldItemData?.isTool && blockData?.harvestTool) {
+                        // 檢查工具的類型和等級是否符合方塊的要求
+                        if (heldItemData.toolType === blockData.harvestTool) {
+                            breakTimeMultiplier /= (2 * heldItemData.toolLevel); // 如果工具正確，將倍率設為 0.5 (速度加倍)
+                        }
+                    }
+
+                    const finalBreakTime = blockData.breakTime * breakTimeMultiplier;
+
+                    if (player.x.toFixed(2) !== lastPlayerPosition.x.toFixed(2) || player.y.toFixed(2) !== lastPlayerPosition.y.toFixed(2)) {
+                        player.digging.isDigging = false;
+                        player.digging.progress = 0;
+                    }
+                    
+                    const { x: currentMouseBlockX, y: currentMouseBlockY } = getBlockFromMouseCoords();
+                    if (currentMouseBlockX !== x || currentMouseBlockY !== y) {
+                        player.digging.isDigging = false;
+                        player.digging.progress = 0;
+                    }
+                    
+                    if (blockType !== 'air' && blockType !== 'bedrock' && ITEM_DATA[blockType] && ITEM_DATA[blockType].isBlock) {
+                        player.digging.progress += deltaTime;
+                        if (player.digging.progress >= finalBreakTime) {
+                            const toolLevel = heldItemData?.toolLevel ? heldItemData.toolLevel : 0;
+                            const arrayY = y - BEDROCK_LAYER_Y;
+                            gameWorld[arrayY][x] = 'air';
+                        
+                            if (ITEM_DATA[blockType]?.drops && toolLevel >= ITEM_DATA[blockType].minToolLevel) {
+                                droppedItems.push({ 
+                                    x: x,
+                                    y: y,
+                                    type: ITEM_DATA[blockType]?.drops,
+                                    yVelocity: 3,
+                                    onGround: false
+                                });
+                            }
+                            
+                            const blockBelowY = y - 1;
+                            const blockBelowArrayY = blockBelowY - BEDROCK_LAYER_Y; 
+                            
+                            if (blockBelowArrayY >= 0 && blockBelowArrayY < WORLD_HEIGHT && gameWorld[blockBelowArrayY][x] === 'dirt') {
+                                if (checkSkylight(x, blockBelowY)) {
+                                    gameWorld[blockBelowArrayY][x] = 'grass_block';
+                                }
+                            }
+                            
+                            droppedItems.forEach(item => {
+                                if (Math.floor(item.x) === x && Math.floor(item.y) === y + 1) {
+                                    item.onGround = false;
+                                }
+                            });
+                            player.digging.isDigging = false;
+                            player.digging.progress = 0;
+                            hoveredBlock = null; 
+                        }
+                    } else {
+                        player.digging.isDigging = false;
+                        player.digging.progress = 0;
+                    }
+                }
+
+                lastPlayerPosition = { x: player.x, y: player.y };
+                player.yVelocity += GRAVITY * deltaTime;
+                let newPlayerY = player.y + player.yVelocity * deltaTime;
+                if (player.yVelocity > 0) {
+                    if (isSolid(player.x, newPlayerY + PLAYER_HEIGHT - 0.01) || isSolid(player.x + 0.99, newPlayerY + PLAYER_HEIGHT - 0.01)) {
+                        player.yVelocity = 0;
+                        player.y = Math.floor(newPlayerY + PLAYER_HEIGHT) - PLAYER_HEIGHT;
+                    } else {
+                        player.y = newPlayerY;
+                    }
+                } else {
+                    if (isSolid(player.x, newPlayerY) || isSolid(player.x + 0.99, newPlayerY)) {
+                        player.onGround = true;
+                        player.yVelocity = 0;
+                        player.y = Math.floor(newPlayerY) + 1;
+                    } else {
+                        player.y = newPlayerY;
+                        player.onGround = false;
+                    }
+                }
+
+                if (player.onGround) {
+                    // 檢查是否有發生跌落 (現在的 Y 座標是否小於 maxFallY)
+                    // Y 越小越低，如果當前 Y 小於追蹤到的最低點，表示有跌落發生
+                    if (player.y < maxFallY) {
+                        
+                        // 計算跌落的總距離 (距離 = 起點Y - 終點Y)
+                        const fallDistance = maxFallY - player.y; // 反轉計算順序
+                        
+                        // 計算傷害 (假設 fallDistance 是以方塊格數為單位)
+                        if (fallDistance > FALL_DAMAGE_THRESHOLD) {
+                            const damage = Math.floor(fallDistance - FALL_DAMAGE_THRESHOLD) * DAMAGE_PER_BLOCK;
+                            
+                            // 造成傷害
+                            takeDamage(damage, DAMAGE_TYPE.FALL);
+                        }
+                    }
+                    
+                    // 玩家落地後，重置 maxFallY 為當前位置 (準備下一次跌落)
+                    // 由於 Y 越大越高，所以 maxFallY 追蹤的是玩家剛離開地面的 Y 座標
+                    maxFallY = player.y; 
+                    
+                } 
+                // 2. 如果玩家在空中 (onGround 為 false)
+                else {
+                    // Y 越大越高。我們追蹤玩家在空中達到的最高點 (最大 Y 值)。
+                    if (player.y > maxFallY) {
+                        maxFallY = player.y;
+                    }
+                }
+                
+                let moveDirection = 0;
+                if (keys['a'] || keys['s'] || keys['arrowleft']) moveDirection -= 1;
+                if (keys['d'] || keys['w'] || keys['arrowright']) moveDirection += 1;
+                let speed = PLAYER_SPEED;
+                if (keys['control'] && moveDirection !== 0) {
+                    speed *= SPRINT_MULTIPLIER;
+                }
+
+                let newPlayerX = player.x + moveDirection * speed * deltaTime;
+                if (moveDirection < 0) {
+                    if (isSolid(newPlayerX, player.y) || isSolid(newPlayerX, player.y + PLAYER_HEIGHT - 0.01)) {
+                        player.x = Math.floor(player.x);
+                    } else {
+                        player.x = newPlayerX;
+                    }
+                } else if (moveDirection > 0) {
+                    if (isSolid(newPlayerX + 0.99, player.y) || isSolid(newPlayerX + 0.99, player.y + PLAYER_HEIGHT - 0.01)) {
+                        player.x = Math.floor(newPlayerX);
+                    } else {
+                        player.x = newPlayerX;
+                    }
+                }
+                
+                droppedItems.forEach(item => {
+                    const itemFloorY = Math.floor(item.y);
+                    const blockBelowIsSolid = isSolid(item.x, itemFloorY - 1);
+                    
+                    if (item.onGround && !blockBelowIsSolid) {
+                        item.onGround = false;
+                    }
+
+                    if (!item.onGround) {
+                        item.yVelocity += ITEM_GRAVITY * deltaTime;
+                        let newItemY = item.y + item.yVelocity * deltaTime;
+                        
+                        const itemBottom = newItemY;
+                        
+                        if (isSolid(item.x + 0.25, itemBottom) || isSolid(item.x + 0.25, itemBottom + 0.49)) {
+                            item.onGround = true;
+                            item.yVelocity = 0;
+                            item.y = Math.floor(newItemY) + 1;
+                        } else {
+                            item.y = newItemY;
+                        }
+                    }
+
+                    if (item.invincibilityTime) {
+                        item.invincibilityTime -= deltaTime;
+                        if (item.invincibilityTime <= 0) {
+                            item.canBePickedUp = true;
+                            delete item.invincibilityTime;
+                        }
+                    }
+                });
+                for (let i = droppedItems.length - 1; i >= 0; i--) {
+                    const item = droppedItems[i];
+                    if (item.canBePickedUp === false) {
+                        continue;
+                    }
+                    const playerCenterY = player.y + PLAYER_HEIGHT / 2;
+                    const dx = (player.x + 0.5) - (item.x + 0.25);
+                    const dy = playerCenterY - (item.y + 0.25);
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    if (distance < ITEM_PICKUP_RANGE) {
+                        if (addToInventory(item.type, 1)) {
+                            droppedItems.splice(i, 1);
+                        }
+                    }
+                }
+                
+                applyGravity();
+                updateCamera();
+                drawMap();
+                updateCoordsDisplay();
+
+                requestAnimationFrame(gameLoop);
+            }
+            
+            function init() {
+                loadImages().then(() => {
+                    createWorld();
+                    resizeAndRecalculate();
+                    
+                    const center_x = Math.floor(WORLD_WIDTH / 2);
+                    let spawn_y = BEDROCK_LAYER_Y;
+                    for (let y = WORLD_HEIGHT + BEDROCK_LAYER_Y - 1; y >= BEDROCK_LAYER_Y; y--) {
+                        const arrayY = y - BEDROCK_LAYER_Y;
+                        if (arrayY >= 0 && arrayY < WORLD_HEIGHT && ITEM_DATA[gameWorld[arrayY][center_x]]?.isSolid) {
+                            spawn_y = y + 1;
+                            break;
+                        }
+                    }
+                    player.x = center_x;
+                    player.y = spawn_y + PLAYER_HEIGHT;
+                    spawnY = spawn_y + PLAYER_HEIGHT;
+                    spawnX = WORLD_WIDTH / 2;
+                    
+                    updateCamera();
+                    drawMap();
+                    updateCoordsDisplay();
+
+                    requestAnimationFrame(gameLoop);
+                });
+            }
+            init();
+
+            /**
+             * 將當前的遊戲狀態和世界地圖序列化為一個 JSON 物件。
+             * @returns {object} 包含遊戲數據的物件。
+             */
+            function serializeWorld() {
+                // 假設您想要儲存的數據包括：
+                const worldData = {
+                    // 1. 遊戲版本或識別碼 (方便未來版本兼容)
+                    version: "v1.0.0", 
+                    
+                    // 2. 玩家數據 (位置、血量、庫存等)
+                    player: {
+                        x: player.x,
+                        y: player.y,
+                        health: player.health,
+                        mainInventory: mainInventory.map(item => ({
+                            type: item ? item.type : null,
+                            count: item ? item.count : 0
+                        })),
+                        hotbar: hotbar.map(item => ({
+                            type: item ? item.type : null,
+                            count: item ? item.count : 0
+                        })),
+                        selectedSlot: selectedSlot
+                    },
+                    
+                    // 3. 世界地圖數據 (最重要的部分)
+                    gameWorld: gameWorld // 直接儲存整個二維陣列
+                    
+                    // [可選] 如果您有掉落物品、生物實體，也應該在這裡序列化
+                };
+
+                return worldData;
+            }
+
+            function exportWorld() {
+                const worldData = serializeWorld();
+                
+                // 1. 將 JSON 物件轉換為格式化的 JSON 字串
+                const jsonString = JSON.stringify(worldData, null, 2); // null, 2 使 JSON 格式化更易讀
+                
+                // 2. 創建一個 Blob (二進位大對象) 來儲存數據
+                const blob = new Blob([jsonString], { type: 'application/json' });
+                
+                // 3. 創建一個下載連結
+                const url = URL.createObjectURL(blob);
+                
+                // 4. 創建一個暫時的隱藏 a 標籤
+                const a = document.createElement('a');
+                a.href = url;
+                
+                const date = new Date().toISOString().slice(0, 10);
+                a.download = `我的世界 - ${date}.2dmc`; 
+                
+                // 5. 模擬點擊下載
+                document.body.appendChild(a);
+                a.click();
+                
+                // 6. 清理和釋放資源
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                
+                // [可選] 在聊天欄中顯示成功訊息
+                showToast("World exported successfully!");
+                showDialog("World Exported!", "World exported successfully!");
+            }
+
+            /**
+             * 將解析後的數據載入到遊戲的全局變數中。
+             * @param {object} data - 包含世界數據的 JSON 物件。
+             * * font-family: 'MinecraftFont', 'GNUFont', sans-serif;
+             */
+            function loadWorldData(data) {
+                console.log(`Loading world version: ${data.version || 'unknown'}`);
+                
+                // 1. 載入世界地圖數據
+                if (data.gameWorld && Array.isArray(data.gameWorld)) {
+                    // [重要] 將舊數據賦值給全局的 gameWorld 變數
+                    gameWorld = data.gameWorld; 
+                }
+
+                // 2. 載入玩家數據
+                if (data.player) {
+                    // 更新玩家位置和狀態
+                    player.x = data.player.x || 0;
+                    player.y = data.player.y || 0;
+                    player.health = data.player.health || 20;
+
+                    // 載入庫存 (如果 inventory 和 hotbar 是 const 以外的變數)
+                    if (data.player.inventory) {
+                        inventory = data.player.inventory.map(item => item.type ? item : null);
+                    }
+                    if (data.player.hotbar) {
+                        hotbar = data.player.hotbar.map(item => item.type ? item : null);
+                    }
+                    selectedSlot = data.player.selectedSlot || 0;
+                }
+                
+                // 3. 觸發重繪和相機更新
+                // 呼叫一個強制遊戲更新和重繪的函數，確保新地圖和玩家位置立即顯示。
+                // 如果您有一個通用的 update 或 draw 函數，請在這裡呼叫它。
+                updateCamera();
+                
+                if (isGamePaused) togglePauseMenu();
+                playNextTrack();
+            }
+
+            function importWorld() {
+                // 1. 動態創建檔案輸入元素
+                const fileInput = document.createElement('input');
+                fileInput.type = 'file';
+                fileInput.accept = '.2dmc';
+                
+                // [可選] 將元素新增到 DOM 中，但保持隱藏（確保 click() 能在所有瀏覽器中觸發）
+                fileInput.style.display = 'none';
+                document.body.appendChild(fileInput);
+
+                // 2. 定義清理函式：移除創建的臨時元素
+                const cleanup = () => {
+                    if (fileInput.parentNode) {
+                        fileInput.parentNode.removeChild(fileInput);
+                    }
+                };
+                
+                // 3. 定義和綁定 'change' 事件處理器
+                fileInput.addEventListener('change', (event) => {
+                    const file = event.target.files[0];
+                    
+                    // --- 檔案處理邏輯開始 ---
+                    
+                    if (!file) {
+                        cleanup(); // 如果使用者取消了選擇，也需要清理
+                        return;
+                    }
+
+                    // 檢查副檔名 (雖然我們在 accept 中設定了，但還是檢查一下更安全)
+                    if (!file.name.toLowerCase().endsWith('.2dmc')) {
+                        cleanup();
+                        showToast(`${file.name} is not a valid world file.`);
+                        return;
+                    }
+
+                    const reader = new FileReader();
+
+                    reader.onload = function(e) {
+                        try {
+                            const jsonString = e.target.result;
+                            const worldData = JSON.parse(jsonString); 
+                            
+                            // 呼叫獨立的數據載入函式
+                            loadWorldData(worldData); 
+                            
+                            showToast('World imported successfully!');
+                            
+                        } catch (error) {
+                            console.error("Error parsing world data:", error);
+                            showToast("Error during import the world, file may be broken.");
+                        }
+                        
+                        cleanup(); // 無論成功或失敗，處理完成後必須清理
+                    };
+
+                    reader.readAsText(file);
+                    
+                    // --- 檔案處理邏輯結束 ---
+                });
+
+                // 4. 觸發檔案選擇器
+                fileInput.click();
+            }
+
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden) {
+                    lastTime = performance.now();
+                }
+            });
+            document.addEventListener(('mousedown'), (e) => {
+                if (e.target.tagName === 'BUTTON') {
+                    playSound('click_press');
+                }
+            });
+            document.addEventListener(('mouseup'), async (e) => {
+                if (e.target.tagName === 'BUTTON') {
+                    const type = e.target.dataset.function;
+                    if (type === 'reload')
+                    {
+                        if (isGamePaused) togglePauseMenu();
+                        if (await showDialog("Create a new world", "Are you sure to create a new world? You will lost this world and all changes in this world!", true)) {
+                            location.reload();
+                            showDialog("Generating world", "Creating world...");
+                        }
+                    }
+                    else if (type === 'changelog') {
+                        if (isGamePaused) togglePauseMenu();
+                        showDialog("Change log - Alpha 1.0.5", "Animation update\n" +
+                        "[+] Animation blocks\n" + 
+                        "[+] Settings\n" +
+                        "[*] UI and page fonts");
+                    }
+                    else if (type === 'creadit') {
+                        if (isGamePaused) togglePauseMenu();
+                        showDialog("Creadits", "FearlessLotus82 (Mincraft Bedrock Gamertag)");
+                    }
+                    else if (type === 'toggle_set') toggleSettingsPage();
+                    else if (type === 'sendmsg') {
+                        if (chatInput.value !== '') addChatMessage(chatInput.value, false);
+                        chatInput.value = '';
+                    }
+                    else if (type === 'export') {
+                        exportWorld();
+                    }
+                    else if (type === 'import') {
+                        importWorld();
+                    }
+                }
+            });
+            window.addEventListener('resize', () => {
+                resizeAndRecalculate();
+                updateCamera();
+                drawMap();
+                updateCoordsDisplay();
+            });
+            canvas.addEventListener('mousedown', handleMouseDown);
+            canvas.addEventListener('mouseup', handleMouseUp);
+            canvas.addEventListener('mouseleave', handleMouseLeave);
+            canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+            window.addEventListener('keydown', handleKeyDown);
+            window.addEventListener('keyup', handleKeyUp);
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,343 @@
+html {
+    font-family: 'MinecraftFont', 'GNUFont', sans-serif;
+}
+
+/* 基礎全螢幕 UI 樣式 (如果你還沒有定義) */
+.full-screen-ui {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000; /* 確保它在大部分 UI 之上 */
+    background-color: rgba(0, 0, 0, 0.2); /* 半透明黑色 */
+    color: white;
+}
+
+/* hidden 類別用於隱藏 UI */
+.hidden {
+    display: none !important;
+}
+
+/* 載入字體 */
+@font-face {
+    font-family: 'MinecraftFont';
+    src: url('/games/minecraft/fonts/MinecraftRegular.otf') format('opentype');
+}
+@font-face {
+    font-family: 'GNUFont';
+    src: url('/games/minecraft/fonts/GNURegular.otf') format('opentype');
+}
+@font-face {
+    font-family: 'MinecraftTen';
+    src: url('/games/minecraft/fonts/MinecraftTen.ttf') format('truetype');
+}
+
+body {
+    background-color: #222;
+    color: #eee;
+    font-family: 'MinecraftFont', 'GNUFont', sans-serif;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100vh;
+    overflow: hidden;
+    position: relative;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+}
+h1 {
+    font-family: 'MinecraftTen', 'MinecraftFont', 'GNUFont', sans-serif;
+    font-size: 0.5cm;
+}
+h2 {
+    font-family: 'MinecraftTen', 'MinecraftFont', 'GNUFont', sans-serif;
+}
+
+#navbar {
+    height: 50px;
+    width: 100%;
+    background-color: #333;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 1.2rem;
+    box-sizing: border-box;
+    padding: 0 20px;
+}
+
+#coords-display {
+    font-size: 1rem;
+    color: #fff;
+}
+
+canvas {
+    border: 2px solid #555;
+    background-color: #87CEEB;
+    flex-grow: 1;
+    z-index: 0;
+}
+
+/* 3. HTML UI 層 - 堆疊在 Canvas 上方 */
+#html-ui-layer {
+    /* 這是關鍵：絕對定位，疊在 Canvas 上 */
+    position: absolute; 
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    /* 確保滑鼠事件預設穿透，讓玩家可以與遊戲世界互動 */
+    pointer-events: none; 
+    /* 將 HTML UI 放在最頂層，確保它覆蓋 Canvas UI */
+    z-index: 10; 
+}
+
+/* 死亡介面 (Death Screen) */
+#death-screen {
+    /* --- 佔滿整個 Canvas 空間 --- */
+    width: 100%;
+    height: 100%;
+    
+    /* --- 背景與顏色 --- */
+    background-color: rgba(139, 0, 0, 0.7); /* 暗紅色 (70% 不透明度) */
+    color: white; /* 確保介面文字是白色的 */
+
+    /* --- 內容居中佈局 --- */
+    display: flex;
+    justify-content: center; /* 水平居中 */
+    align-items: center; /* 垂直居中 */
+    flex-direction: column; /* 讓內容垂直堆疊 */
+
+    /* --- 淡入/淡出效果 --- */
+    opacity: 0; /* 初始狀態：完全透明 */
+    transition: opacity 1s ease-out; /* 關鍵：設定 1.5 秒平滑過渡 */
+    
+    /* 預設隱藏且不能點擊 */
+    pointer-events: none; 
+}
+
+/* 觸發顯示和淡入的 class */
+.is-visible {
+    /* 最終狀態：完全不透明，CSS transition 會自動執行動畫 */
+    opacity: 0.75 !important; 
+    /* 顯示時，允許滑鼠點擊按鈕 */
+    pointer-events: auto !important; 
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* 6. 互動修正：當死亡介面顯示時，才允許點擊 */
+#death-screen:not(.hidden) {
+    pointer-events: auto; 
+}
+
+button {
+    /* --- 尺寸與字體 --- */
+    padding: 12px 30px;
+    min-width: 7cm;
+    margin-top: 20px;
+    font-size: 1.1em;
+    font-weight: bold;
+    font-family: 'MinecraftFont', 'GNUFont', sans-serif;
+    color: white; 
+    text-shadow: 1px 1px 0 #333; 
+    cursor: pointer;
+    opacity: 1;
+
+    /* --- 核心 Minecraft 外觀 --- */
+    background-color: #A0A0A0; /* 基礎灰色 */
+    border: none;
+    
+    /* --- 垂直厚度效果：底部厚度 --- */
+    box-shadow: 0px 7px 0px #333333; /* 向下 4px 的硬陰影 */
+}
+
+/* 按鈕懸停 (Hover) 效果 */
+button:hover {
+    background-color: #B0B0B0;
+}
+
+/* 按鈕按壓 (Active) 效果：瞬時模擬按鍵被按下 */
+button:active {
+    /* 1. 移除外部陰影：看起來像按鈕被壓平 */
+    box-shadow: none;
+    
+    /* 2. 物理位移：將按鈕向下移動 4px，填補外部陰影留下的空間 */
+    transform: translateY(7px);
+}
+
+.longbtn {
+    min-width: 14.2cm;
+}
+.shortbtn {
+    min-width: 2cm;
+}
+
+/* 1. 容器：定位在螢幕上方中央 */
+#toast-container {
+    position: absolute;
+    top: 0;
+    left: 50%; /* 水平置中 */
+    transform: translateX(-50%); /* 實際置中 */
+    z-index: 1001; /* 確保在所有 UI 上方 */
+    width: 98.5vw; /* 限制寬度 */
+}
+
+/* 2. 單個 Toast 訊息的樣式 */
+.toast {
+    /* Minecraft UI 樣式 */
+    background-color: rgba(30, 30, 30, 0.95); /* 深色半透明背景 */
+    border-radius: 4px;
+    font-family: 'MinecraftFont', 'GNUFont', sans-serif;
+    font-size: 20px;
+    margin-top: 2px;
+    color: white;
+    padding: 12px 20px;
+    border: 2px solid white;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3); /* 輕微陰影 */
+    width: 95vw;
+
+    /* 初始狀態：位於上方（被藏起來） */
+    opacity: 1; 
+    transform: translateY(-100%); 
+    
+    /* 關鍵：設置動畫過渡 */
+    transition: transform 0.5s linear;
+}
+
+/* 3. 顯示狀態：滑落到螢幕上 */
+.toast.show {
+    transform: translateY(0); /* 歸位到正常位置 */
+}
+
+#dialog-box {
+    background-color: rgb(30, 30, 30); /* 完全不透明的深色背景 */
+    color: white;
+    border: 2px solid #555;
+    padding: 25px;
+    width: 90%;
+    max-width: 500px; /* 限制對話框寬度 */
+    text-align: center;
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+    z-index: 1000; /* 確保它在遮罩層之上 */
+}
+
+#dialog-title {
+    margin-top: 0;
+    font-size: 1.5em;
+    border-bottom: 1px solid #555;
+    padding-bottom: 10px;
+}
+
+#dialog-content {
+    margin: 15px 0;
+    text-align: left;
+}
+
+#dialog-buttons {
+    display: flex;
+    flex-direction: column; /* 關鍵：垂直排列 */
+    justify-content: center;
+    align-items: center; /* 讓整個按鈕區塊在父容器中置中 */
+    margin-top: 1cm;
+}
+
+/* 2. 讓按鈕佔滿容器的寬度 */
+#dialog-buttons button {
+    min-width: 120px;
+    width: 100%; /* 關鍵：讓按鈕佔滿 #dialog-buttons 容器的寬度 */
+    margin: 5px 0; /* 在按鈕之間新增上下間距 */
+}
+
+.settings-panel {
+    padding: 20px 40px;
+    width: 400px;
+    text-align: center;
+    color: white;
+    font-family: 'MinecraftFont', 'GNUFont', sans-serif;
+    z-index: 1001;
+}
+
+#full-chat-screen, #full-chat-screen * {
+    font-family: 'MinecraftFont', 'GNUFont', sans-serif;
+    font-size: 16px; 
+}
+
+.full-chat-ui {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    /* 輕微的半透明背景，但不如設定畫面那麼暗 */
+    background-color: rgba(0, 0, 0, 0.65); 
+    display: flex;
+    flex-direction: column; /* 垂直排列：歷史訊息在上，輸入框在下 */
+    padding: 10px 20px 20px 20px;
+    box-sizing: border-box;
+    z-index: 90;
+}
+
+#chat-history {
+    flex-grow: 1; /* 佔據大部分空間 */
+    max-height: 75vh; /* 限制歷史訊息的高度 */
+    width: 100vw;
+    margin-left: 0px;
+    overflow-y: auto; /* 啟用捲動條 */
+    margin-bottom: 10px;
+    padding-right: 15px; /* 為捲軸預留空間 */
+}
+
+#chat-history p {
+    padding: 3px 5px;
+    margin: 2px 0;
+    word-wrap: break-word;
+    font-size: 20px;
+}
+
+#chat-input-area {
+    position: relative;
+    top: 50px;
+    display: flex;
+    align-items: center;
+    width: 100%;
+    /* 保持在底部 */
+}
+
+#chat-input {
+    flex-grow: 1;
+    background-color: rgba(0, 0, 0, 0.7);
+    color: white;
+    border: 1px solid #5A5A5A;
+    padding: 8px 10px;
+    outline: none;
+}
+
+.window-title {
+    height: 50px;
+    width: 100vw;
+    position: absolute;
+    left: 0;
+    top: 0;
+    background-color: #929292;
+    font-family: 'MinecraftTen', 'MinecraftFont', "GNUFont", sans-serif;
+    text-align: center;
+    margin: 0;
+}
+
+.error-message {
+    color: rgb(242, 46, 46);
+}
+.success-message {
+    color: rgb(105, 239, 105);
+}
